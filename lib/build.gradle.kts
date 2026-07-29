@@ -16,7 +16,10 @@ group = "io.github.abdallahmehiz"
 android {
     namespace = "is.xyz.mpv"
     compileSdk = 36
-    defaultConfig { minSdk = 21 }
+    defaultConfig {
+        minSdk = 21
+        buildConfigField("String", "VERSION", "\"$version\"")
+    }
 
     buildFeatures {
         buildConfig = true
