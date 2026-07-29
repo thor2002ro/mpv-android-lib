@@ -21,6 +21,7 @@ class MPV(
     context: Context,
     configDir: String = context.filesDir.resolve("mpv").toString(),
     cacheDir: String = context.cacheDir.resolve("mpv").toString(),
+    options: Map<String, String> = emptyMap(),
 ) {
     @Suppress("unused")
     private var nativeHandle: Long = 0
@@ -446,11 +447,17 @@ class MPV(
             systemLibraryLoaded = true
         }
         nativeCreate(context)
-        nativeInit()
-        initSession()
-        setConfigDir(configDir)
-        setCacheDir(cacheDir)
-        setOptionString("idle", "once")
-        setPropertyBoolean("pause", true)
+        try {
+            setConfigDir(configDir)
+            setCacheDir(cacheDir)
+            setOptionString("idle", "once")
+            options.forEach { (name, value) -> setOptionString(name, value) }
+            nativeInit()
+            initSession()
+            setPropertyBoolean("pause", true)
+        } catch (error: Throwable) {
+            nativeDestroy()
+            throw error
+        }
     }
 }
