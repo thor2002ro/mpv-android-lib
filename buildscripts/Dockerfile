@@ -39,8 +39,8 @@ RUN apt-get update && apt-get install -y \
     && apt-get clean \
     && rm -rf /var/lib/apt/lists/*
 
-# required by mbedtls
-RUN pip3 install --break-system-packages jsonschema jinja2
+# required by mbedtls and fontconfig
+RUN pip3 install --break-system-packages jsonschema jinja2 'meson>=1.11'
 
 RUN mkdir -p /home/mpvbuilder/mpv-android
 WORKDIR /home/mpvbuilder/mpv-android

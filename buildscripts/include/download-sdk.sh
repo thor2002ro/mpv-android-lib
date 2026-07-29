@@ -11,10 +11,10 @@ if [ "$os" == "linux" ]; then
 	if [ $IN_CI -eq 0 ]; then
 		if hash yum &>/dev/null; then
 			sudo yum install autoconf pkgconfig libtool ninja-build \
-				unzip wget meson nasm
+				unzip wget meson nasm gperf
 		elif apt-get -v &>/dev/null; then
 			sudo apt-get install autoconf pkg-config libtool ninja-build \
-				unzip wget meson nasm
+				unzip wget meson nasm gperf
 		else
 			echo "Note: dependencies were not installed, you have to do that manually."
 		fi
@@ -29,7 +29,6 @@ if [ "$os" == "linux" ]; then
 		exit 255
 	fi
 
-	os_ndk="linux"
 elif [ "$os" == "mac" ]; then
 	if [ $IN_CI -eq 0 ]; then
 		if ! hash brew 2>/dev/null; then
@@ -38,7 +37,7 @@ elif [ "$os" == "mac" ]; then
 		fi
 		brew install \
 			automake autoconf libtool pkg-config \
-			coreutils gnu-sed wget meson ninja
+			coreutils gnu-sed wget meson ninja gperf
 	fi
 	if ! javac -version &>/dev/null; then
 		echo "Error: missing Java Development Kit. Install it manually."
@@ -71,15 +70,10 @@ if [ -d "android-ndk-${v_ndk}" ]; then
 elif [ -d "android-sdk-$os/ndk/${v_ndk_n}" ]; then
 	echo "Creating NDK symlink to SDK."
 	ln -s "android-sdk-$os/ndk/${v_ndk_n}" "android-ndk-${v_ndk}"
-elif [ -z "${os_ndk}" ]; then
+else
 	echo "Downloading NDK with sdkmanager."
 	echo y | sdkmanager "ndk;${v_ndk_n}"
 	ln -s "android-sdk-$os/ndk/${v_ndk_n}" "android-ndk-${v_ndk}"
-else
-	echo "Downloading NDK."
-	$WGET "http://dl.google.com/android/repository/android-ndk-${v_ndk}-${os_ndk}.zip"
-	unzip -q "android-ndk-${v_ndk}-${os_ndk}.zip"
-	rm "android-ndk-${v_ndk}-${os_ndk}.zip"
 fi
 if ! grep -qF "${v_ndk_n}" "android-ndk-${v_ndk}/source.properties"; then
 	echo "Error: NDK exists but is not the correct version (expecting ${v_ndk_n})"
@@ -91,5 +85,16 @@ mkdir -p bin
 $WGET "https://github.com/FFmpeg/gas-preprocessor/raw/master/gas-preprocessor.pl" \
 	-O bin/gas-preprocessor.pl
 chmod +x bin/gas-preprocessor.pl
+
+# fontconfig requires a newer Meson than some supported Linux distributions ship.
+meson_version=$(meson --version 2>/dev/null || echo 0)
+if [ "$os" == "linux" ] && [ "$(printf '%s\n%s\n' "$v_meson" "$meson_version" | sort -V | head -n1)" != "$v_meson" ]; then
+	if [ ! -d "meson-${v_meson}" ]; then
+		$WGET "https://github.com/mesonbuild/meson/releases/download/${v_meson}/meson-${v_meson}.tar.gz"
+		tar -xzf "meson-${v_meson}.tar.gz"
+		rm "meson-${v_meson}.tar.gz"
+	fi
+	ln -sf "../meson-${v_meson}/meson.py" bin/meson
+fi
 
 cd ..

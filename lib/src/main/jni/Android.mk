@@ -58,12 +58,6 @@ LOCAL_EXPORT_C_INCLUDES := $(PREFIX)/include
 include $(PREBUILT_SHARED_LIBRARY)
 
 include $(CLEAR_VARS)
-LOCAL_MODULE := libxml2
-LOCAL_SRC_FILES := $(PREFIX)/lib/$(LOCAL_MODULE).so
-LOCAL_EXPORT_C_INCLUDES := $(PREFIX)/include
-include $(PREBUILT_SHARED_LIBRARY)
-
-include $(CLEAR_VARS)
 LOCAL_MODULE := libmpv
 LOCAL_SRC_FILES := $(PREFIX)/lib/libmpv.so
 LOCAL_EXPORT_C_INCLUDES := $(PREFIX)/include
@@ -84,7 +78,8 @@ LOCAL_SRC_FILES := \
 	node.cpp \
 	thumbnail.cpp \
 	mpv_context.cpp
-LOCAL_LDLIBS    := -llog -lGLESv3 -lEGL -latomic
+LOCAL_LDLIBS    := -llog -latomic
+LOCAL_LDFLAGS   := -Wl,-z,max-page-size=16384
 LOCAL_SHARED_LIBRARIES := swscale avcodec mpv
 
 include $(BUILD_SHARED_LIBRARY)
