@@ -34,8 +34,8 @@ jobs:
       - name: Install deps
         run: |
           sudo apt-get update
-          sudo apt-get install autoconf pkg-config libtool ninja-build python3-pip
-          sudo pip3 install meson
+          sudo apt-get install autoconf pkg-config libtool ninja-build python3-pip gperf
+          sudo pip3 install 'meson>=1.11'
 
       - name: Download deps
         run: |

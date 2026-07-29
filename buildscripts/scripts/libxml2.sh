@@ -2,22 +2,21 @@
 
 . ../../include/path.sh
 
-[ -f configure ] || ./autogen.sh --host=$ndk_triple --without-python
+build=_build$ndk_suffix
 
 if [ "$1" == "build" ]; then
 	true
 elif [ "$1" == "clean" ]; then
-	make clean
+	rm -rf $build
 	exit 0
 else
 	exit 255
 fi
 
-$0 clean # separate building not supported, always clean
+unset CC CXX # meson wants these unset
 
-./configure \
-	--host=$ndk_triple \
-	--without-python \
-	--without-iconv
-make -j$cores
-make DESTDIR="$prefix_dir" install
+meson setup $build --cross-file "$prefix_dir"/crossfile.txt \
+	-Dminimum=true -D{push,reader,sax1,iso8859x,pattern}=enabled
+
+ninja -C $build -j$cores
+DESTDIR="$prefix_dir" ninja -C $build install

@@ -446,6 +446,7 @@ class MPV(
             System.loadLibrary("player")
             systemLibraryLoaded = true
         }
+        Utils.prepareConfig(context, configDir, cacheDir)
         nativeCreate(context)
         try {
             setConfigDir(configDir)
