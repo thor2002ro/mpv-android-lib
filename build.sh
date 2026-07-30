@@ -7,7 +7,7 @@ mkdir -p "$work_dir"
 
 dependency_state="$work_dir/.dependency-state"
 sdk_state="$work_dir/.sdk-state"
-dependency_hash=$(sha256sum "$repo_dir/buildscripts/include/depinfo.sh" | cut -d' ' -f1)
+dependency_hash=$(find "$repo_dir/buildscripts/include" "$repo_dir/buildscripts/scripts" -type f -print0 | sort -z | xargs -0 sha256sum | sha256sum | cut -d' ' -f1)
 source "$repo_dir/buildscripts/include/depinfo.sh"
 sdk_hash=$(printf '%s\n' "$v_sdk" "$v_ndk" "$v_ndk_n" "$v_sdk_platform" "$v_sdk_build_tools" | sha256sum | cut -d' ' -f1)
 if [[ ! -f "$dependency_state" || "$(<"$dependency_state")" != "$dependency_hash" ]]; then
