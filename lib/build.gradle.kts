@@ -17,7 +17,7 @@ android {
     namespace = "is.xyz.mpv"
     compileSdk = 36
     defaultConfig {
-        minSdk = 21
+        minSdk = 24
         buildConfigField("String", "VERSION", "\"$version\"")
     }
 

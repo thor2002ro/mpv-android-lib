@@ -26,7 +26,7 @@ esac
 "$DIR/sdk/android-ndk-${v_ndk}/ndk-build" \
 	-C "$DIR/sdk/android-ndk-${v_ndk}/sources/third_party/shaderc" \
 	NDK_PROJECT_PATH=. APP_BUILD_SCRIPT=Android.mk \
-	APP_ABI="$abi" APP_PLATFORM=android-21 APP_STL=c++_static \
+	APP_ABI="$abi" APP_PLATFORM=android-24 APP_STL=c++_static \
 	NDK_OUT="$shaderc_build/obj" NDK_LIBS_OUT="$shaderc_build/libs" \
 	libshaderc_combined
 mkdir -p "$prefix_dir"/{include/shaderc,lib/pkgconfig}
@@ -47,10 +47,11 @@ cat > "$prefix_dir/lib/pkgconfig/vulkan.pc" <<EOF
 Name: Vulkan
 Description: Android NDK Vulkan headers
 Version: 1.4.0
+Libs: -lvulkan
 EOF
 
 meson setup $build --cross-file "$prefix_dir"/crossfile.txt \
-	-Dvulkan=enabled -Dvk-proc-addr=disabled \
+	-Dvulkan=enabled -Dvk-proc-addr=enabled \
 	-Dshaderc=enabled -Dglslang=disabled -Ddemos=false
 
 ninja -C $build -j$cores
