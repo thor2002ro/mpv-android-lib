@@ -79,5 +79,13 @@ fi
 
 # mpv
 [ ! -d mpv ] && git clone --depth 1 https://github.com/mpv-player/mpv
+for patch_file in "$(realpath ../patches/mpv)"/*.patch; do
+	if git -C mpv apply --check "$patch_file"; then
+		git -C mpv apply "$patch_file"
+	elif ! git -C mpv apply --reverse --check "$patch_file"; then
+		echo >&2 "Unable to apply mpv patch: $patch_file"
+		exit 1
+	fi
+done
 
 cd ..
