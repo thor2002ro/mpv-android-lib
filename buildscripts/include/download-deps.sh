@@ -78,7 +78,12 @@ fi
 [ ! -d libplacebo ] && git clone --depth 1 --recursive https://github.com/haasn/libplacebo
 
 # mpv
-[ ! -d mpv ] && git clone --depth 1 https://github.com/mpv-player/mpv
+if [ ! -d mpv ]; then
+	git clone --depth 1 https://github.com/mpv-player/mpv
+else
+	git -C mpv fetch --depth 1 origin master
+	git -C mpv reset --hard FETCH_HEAD
+fi
 for patch_file in "$(realpath ../patches/mpv)"/*.patch; do
 	if git -C mpv apply --check "$patch_file"; then
 		git -C mpv apply "$patch_file"

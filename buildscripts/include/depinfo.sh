@@ -18,8 +18,6 @@ v_freetype=2.14.3
 v_mbedtls=3.6.7
 v_libxml2=2.15.3
 v_fontconfig=2.18.2
-
-
 ## Dependency tree
 # I would've used a dict but putting arrays in a dict is not a thing
 
