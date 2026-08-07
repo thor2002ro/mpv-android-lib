@@ -8,11 +8,11 @@ v_ndk=r29
 v_ndk_n=29.0.14206865
 v_sdk_platform=35
 v_sdk_build_tools=35.0.0
-v_meson=1.11.0
+v_meson=1.11.2
 
 v_lua=5.2.4
 v_unibreak=7.0
-v_harfbuzz=14.2.1
+v_harfbuzz=14.3.0
 v_fribidi=1.0.16
 v_freetype=2.14.3
 v_mbedtls=3.6.7
