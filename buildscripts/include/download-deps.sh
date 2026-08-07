@@ -68,11 +68,7 @@ fi
 [ ! -d libass ] && git clone --depth 1 https://github.com/libass/libass
 
 # lua
-if [ ! -d lua ]; then
-	mkdir lua
-	$WGET https://www.lua.org/ftp/lua-$v_lua.tar.gz -O - | \
-		tar -xz -C lua --strip-components=1
-fi
+[ ! -d lua ] && git clone --depth 1 --branch v5-2 https://github.com/lua/lua
 
 # libplacebo
 [ ! -d libplacebo ] && git clone --depth 1 --recursive https://github.com/haasn/libplacebo

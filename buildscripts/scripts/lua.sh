@@ -5,7 +5,7 @@
 if [ "$1" == "build" ]; then
 	true
 elif [ "$1" == "clean" ]; then
-	make clean
+	rm -f -- *.o liblua.a lua luac
 	exit 0
 else
 	exit 255
@@ -23,25 +23,35 @@ mycflags=(
 	-Dlua_fseek
 )
 
-# LUA_T= and LUAC_T= to disable building lua & luac
-# -Dgetlocaledecpoint()=('.') fixes bionic missing decimal_point in localeconv
+# The v5-2 GitHub branch uses a developer makefile. Override its test object
+# list with the production 5.2.4 library objects and install only mpv's inputs.
+core_objects=(
+	lapi.o lcode.o lctype.o ldebug.o ldo.o ldump.o lfunc.o lgc.o llex.o
+	lmem.o lobject.o lopcodes.o lparser.o lstate.o lstring.o ltable.o ltm.o
+	lundump.o lvm.o lzio.o
+)
+library_objects=(
+	lbaselib.o lbitlib.o lcorolib.o ldblib.o liolib.o lmathlib.o loslib.o
+	ltablib.o lstrlib.o loadlib.o linit.o
+)
 make CC="$CC" AR="$AR rc" RANLIB="$RANLIB" \
-	MYCFLAGS="${mycflags[*]}" \
-	PLAT=linux LUA_T= LUAC_T= -j$cores
+	CFLAGS="-O2 ${mycflags[*]}" \
+	CORE_O="${core_objects[*]}" LIB_O="${library_objects[*]}" a -j$cores
 
-# TO_BIN=/dev/null disables installing lua & luac
-# Install to usr/local to match meson-based builds (DESTDIR + prefix=/usr/local)
 lua_install_dir="$prefix_dir/usr/local"
-mkdir -p "$lua_install_dir"
-make INSTALL=${INSTALL:-install} INSTALL_TOP="$lua_install_dir" TO_BIN=/dev/null install
+mkdir -p "$lua_install_dir/lib/pkgconfig" "$lua_install_dir/include"
+${INSTALL:-install} -m 644 liblua.a "$lua_install_dir/lib/liblua.a"
+${INSTALL:-install} -m 644 lua.h luaconf.h lauxlib.h lualib.h \
+	"$lua_install_dir/include/"
 
-# make pc only generates a partial pkg-config file because ????
-mkdir -p "$lua_install_dir/lib/pkgconfig"
-make pc >"$lua_install_dir/lib/pkgconfig/lua.pc"
-cat >>"$lua_install_dir/lib/pkgconfig/lua.pc" <<'EOF'
+cat >"$lua_install_dir/lib/pkgconfig/lua.pc" <<EOF
+prefix=/usr/local
+libdir=\${prefix}/lib
+includedir=\${prefix}/include
+
 Name: Lua
 Description:
-Version: ${version}
-Libs: -L${libdir} -llua
-Cflags: -I${includedir}
+Version: $v_lua
+Libs: -L\${libdir} -llua -lm
+Cflags: -I\${includedir}
 EOF
