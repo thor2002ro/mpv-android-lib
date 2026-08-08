@@ -1,0 +1,145 @@
+diff --git a/player/command.c b/player/command.c
+index a0dccf4..65faf07 100644
+--- a/player/command.c
++++ b/player/command.c
+@@ -7723,6 +7723,13 @@ const struct mp_cmd_def mp_cmds[] = {
+                 OPTDEF_INT(0)},
+         },
+     },
++    { "subtitle-overlay-raw", cmd_subtitle_overlay_raw,
++        {
++            {"previous-change-id", OPT_INT64(v.i64), OPTDEF_INT64(0)},
++            {"canvas-w", OPT_INT(v.i), OPTDEF_INT(0)},
++            {"canvas-h", OPT_INT(v.i), OPTDEF_INT(0)},
++        },
++    },
+     { "loadfile", cmd_loadfile,
+         {
+             {"url", OPT_STRING(v.s)},
+diff --git a/player/screenshot.c b/player/screenshot.c
+index d21a53a..e74ec10 100644
+--- a/player/screenshot.c
++++ b/player/screenshot.c
+@@ -39,6 +39,7 @@
+ #include "video/out/vo.h"
+ #include "video/image_writer.h"
+ #include "video/sws_utils.h"
++#include "sub/draw_bmp.h"
+ #include "sub/osd.h"
+ #include "stream/stream.h"
+ 
+@@ -57,6 +58,7 @@ typedef struct screenshot_ctx {
+ 
+     int frameno;
+     uint64_t last_frame_count;
++    struct mp_draw_sub_cache *subtitle_overlay_cache;
+ } screenshot_ctx;
+ 
+ void screenshot_init(struct MPContext *mpctx)
+@@ -589,6 +591,95 @@ void cmd_screenshot_raw(void *p)
+     talloc_steal(ba, img);
+ }
+ 
++void cmd_subtitle_overlay_raw(void *p)
++{
++    struct mp_cmd_ctx *cmd = p;
++    struct MPContext *mpctx = cmd->mpctx;
++    struct mpv_node *out = &cmd->result;
++    struct mp_osd_res res = osd_get_vo_res(mpctx->osd);
++
++    cmd->success = false;
++    if (res.w <= 0 || res.h <= 0) {
++        res.w = cmd->args[1].v.i;
++        res.h = cmd->args[2].v.i;
++        res.display_par = 1.0;
++    }
++    if (res.w <= 0 || res.h <= 0)
++        return;
++
++    struct sub_bitmap_list *subs = osd_render(
++        mpctx->osd, res, mpctx->video_pts, OSD_DRAW_SUB_ONLY,
++        mp_draw_sub_formats);
++    if (!subs)
++        return;
++
++    static const uint64_t FNV64_PRIME = UINT64_C(1099511628211);
++    uint64_t change_id = subs->change_id;
++    change_id = (change_id ^ (uint32_t)res.w) * FNV64_PRIME;
++    change_id = (change_id ^ (uint32_t)res.h) * FNV64_PRIME;
++
++    node_init(out, MPV_FORMAT_NODE_MAP, NULL);
++    node_map_add_int64(out, "change-id", change_id);
++    node_map_add_int64(out, "canvas-w", res.w);
++    node_map_add_int64(out, "canvas-h", res.h);
++
++    if (change_id == (uint64_t)cmd->args[0].v.i64) {
++        cmd->success = true;
++        talloc_free(subs);
++        return;
++    }
++
++    screenshot_ctx *ctx = mpctx->screenshot_ctx;
++    if (!ctx->subtitle_overlay_cache) {
++        // Scalers own config caches, so free them with the command context
++        // before MPV destroys the config mutex.
++        ctx->subtitle_overlay_cache =
++            mp_draw_sub_alloc(mpctx->command_ctx, mpctx->global);
++    }
++
++    struct mp_rect active[1], modified[1];
++    int num_active = 0, num_modified = 0;
++    struct mp_image *overlay = mp_draw_sub_overlay(
++        ctx->subtitle_overlay_cache, subs,
++        active, MP_ARRAY_SIZE(active), &num_active,
++        modified, MP_ARRAY_SIZE(modified), &num_modified);
++    talloc_free(subs);
++    if (!overlay)
++        return;
++
++    if (!num_active) {
++        node_map_add_int64(out, "w", 0);
++        node_map_add_int64(out, "h", 0);
++        cmd->success = true;
++        return;
++    }
++
++    struct mp_rect rc = active[0];
++    int width = mp_rect_w(rc);
++    int height = mp_rect_h(rc);
++    size_t stride = width * 4;
++    size_t size = stride * height;
++
++    node_map_add_int64(out, "x", rc.x0);
++    node_map_add_int64(out, "y", rc.y0);
++    node_map_add_int64(out, "w", width);
++    node_map_add_int64(out, "h", height);
++    node_map_add_int64(out, "stride", stride);
++    node_map_add_string(out, "format", "bgra");
++
++    struct mpv_byte_array *ba =
++        node_map_add(out, "data", MPV_FORMAT_BYTE_ARRAY)->u.ba;
++    uint8_t *data = talloc_size(ba, size);
++    if (!data)
++        return;
++    for (int y = 0; y < height; y++) {
++        memcpy(data + y * stride,
++               mp_image_pixel_ptr(overlay, 0, rc.x0, rc.y0 + y), stride);
++    }
++    *ba = (struct mpv_byte_array){.data = data, .size = size};
++    cmd->success = true;
++}
++
+ static void screenshot_fin(struct mp_cmd_ctx *cmd)
+ {
+     void **a = cmd->on_completion_priv;
+diff --git a/player/screenshot.h b/player/screenshot.h
+index 97abc79..775577a 100644
+--- a/player/screenshot.h
++++ b/player/screenshot.h
+@@ -42,5 +42,6 @@ struct mp_image *convert_image(struct mp_image *image, int destfmt,
+ void cmd_screenshot(void *p);
+ void cmd_screenshot_to_file(void *p);
+ void cmd_screenshot_raw(void *p);
++void cmd_subtitle_overlay_raw(void *p);
+ 
+ #endif /* MPLAYER_SCREENSHOT_H */

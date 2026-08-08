@@ -97,7 +97,7 @@ jni_func(void, nativeDestroy) {
         return;
     }
 
-    // poke event thread and wait for it to exit
+    // Stop the only thread waiting on the handle before MPV tears down its core.
     ctx->event_thread_request_exit = true;
     mpv_wakeup(ctx->mpv);
     pthread_join(ctx->event_thread_id, NULL);
