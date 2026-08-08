@@ -18,6 +18,8 @@ v_freetype=2.14.3
 v_mbedtls=3.6.7
 v_libxml2=2.15.3
 v_fontconfig=2.18.2
+v_ffmpeg=master
+v_libplacebo=master
 ## Dependency tree
 # I would've used a dict but putting arrays in a dict is not a thing
 
@@ -39,8 +41,5 @@ dep_mpv_android=(mpv)
 
 ## for CI workflow
 
-# pinned ffmpeg revision
-v_ci_ffmpeg=n8.1.2
-
 # filename used to uniquely identify a build prefix
-ci_tarball="prefix-ndk-${v_ndk}-meson-${v_meson}-lua-${v_lua}-unibreak-${v_unibreak}-harfbuzz-${v_harfbuzz}-fribidi-${v_fribidi}-freetype-${v_freetype}-libxml2-${v_libxml2}-fontconfig-${v_fontconfig}-mbedtls-${v_mbedtls}-ffmpeg-${v_ci_ffmpeg}.tgz"
+ci_tarball="prefix-ndk-${v_ndk}-meson-${v_meson}-lua-${v_lua}-unibreak-${v_unibreak}-harfbuzz-${v_harfbuzz}-fribidi-${v_fribidi}-freetype-${v_freetype}-libxml2-${v_libxml2}-fontconfig-${v_fontconfig}-mbedtls-${v_mbedtls}-ffmpeg-${v_ffmpeg}-libplacebo-${v_libplacebo}.tgz"
