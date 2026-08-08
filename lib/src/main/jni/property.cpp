@@ -1,5 +1,6 @@
 #include <jni.h>
 #include <stdlib.h>
+#include <string.h>
 
 #include <mpv/client.h>
 

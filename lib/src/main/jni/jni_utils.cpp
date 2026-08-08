@@ -65,6 +65,9 @@ void init_methods_cache(JNIEnv *env)
     mpv_MPVNode_DoubleNode = FIND_CLASS("is/xyz/mpv/MPVNode$DoubleNode");
     mpv_MPVNode_DoubleNode_init = env->GetMethodID(mpv_MPVNode_DoubleNode, "<init>", "(D)V");
 
+    mpv_MPVNode_ByteArrayNode = FIND_CLASS("is/xyz/mpv/MPVNode$ByteArrayNode");
+    mpv_MPVNode_ByteArrayNode_init = env->GetMethodID(mpv_MPVNode_ByteArrayNode, "<init>", "([B)V");
+
     mpv_MPVNode_ArrayNode = FIND_CLASS("is/xyz/mpv/MPVNode$ArrayNode");
     mpv_MPVNode_ArrayNode_init = env->GetMethodID(mpv_MPVNode_ArrayNode, "<init>", "([Lis/xyz/mpv/MPVNode;)V");
 

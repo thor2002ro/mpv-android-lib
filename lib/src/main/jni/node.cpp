@@ -28,6 +28,18 @@ jobject mpv_node_to_jobject(JNIEnv *env, const mpv_node *node) {
         case MPV_FORMAT_DOUBLE: {
             return env->NewObject(mpv_MPVNode_DoubleNode, mpv_MPVNode_DoubleNode_init, (jdouble)node->u.double_);
         }
+        case MPV_FORMAT_BYTE_ARRAY: {
+            if (!node->u.ba || node->u.ba->size > INT32_MAX) return NULL;
+            jsize size = static_cast<jsize>(node->u.ba->size);
+            jbyteArray bytes = env->NewByteArray(size);
+            if (!bytes) return NULL;
+            env->SetByteArrayRegion(bytes, 0, size,
+                static_cast<const jbyte*>(node->u.ba->data));
+            jobject byteArrayNode = env->NewObject(
+                mpv_MPVNode_ByteArrayNode, mpv_MPVNode_ByteArrayNode_init, bytes);
+            env->DeleteLocalRef(bytes);
+            return byteArrayNode;
+        }
         case MPV_FORMAT_NODE_ARRAY: {
             jobjectArray nodeArray = env->NewObjectArray(node->u.list->num, mpv_MPVNode, NULL);
             for (int i = 0; i < node->u.list->num; i++) {

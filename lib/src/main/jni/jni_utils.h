@@ -31,10 +31,12 @@ UTIL_EXTERN jmethodID mpv_MPV_eventProperty_S,
 
 
 UTIL_EXTERN jclass mpv_MPVNode_None, mpv_MPVNode_StringNode, mpv_MPVNode_BooleanNode,
-        mpv_MPVNode_IntNode, mpv_MPVNode_DoubleNode, mpv_MPVNode_ArrayNode, mpv_MPVNode_MapNode, mpv_MPVNode;
+        mpv_MPVNode_IntNode, mpv_MPVNode_DoubleNode, mpv_MPVNode_ByteArrayNode,
+        mpv_MPVNode_ArrayNode, mpv_MPVNode_MapNode, mpv_MPVNode;
 UTIL_EXTERN jfieldID mpv_MPVNode_None_INSTANCE;
 UTIL_EXTERN jmethodID mpv_MPVNode_StringNode_init, mpv_MPVNode_BooleanNode_init,
         mpv_MPVNode_IntNode_init, mpv_MPVNode_DoubleNode_init,
+        mpv_MPVNode_ByteArrayNode_init,
         mpv_MPVNode_ArrayNode_init, mpv_MPVNode_MapNode_init;
 
 UTIL_EXTERN jclass java_util_ArrayList, java_util_HashMap;
