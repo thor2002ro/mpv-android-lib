@@ -10,6 +10,10 @@ msg() {
 }
 
 fetch_prefix() {
+	# A moving FFmpeg branch must be rebuilt instead of restored from cache.
+	if [[ "$v_ffmpeg" == master || "$v_libplacebo" == master ]]; then
+		return 1
+	fi
 	if [[ "$CACHE_MODE" == folder ]]; then
 		local text=
 		if [ -f "$CACHE_FOLDER/id.txt" ]; then
@@ -34,7 +38,7 @@ build_prefix() {
 	msg "Compiling"
 	./buildall.sh --only-deps mpv
 
-	if [[ "$CACHE_MODE" == folder && -w "$CACHE_FOLDER" ]]; then
+	if [[ "$v_ffmpeg" != master && "$v_libplacebo" != master && "$CACHE_MODE" == folder && -w "$CACHE_FOLDER" ]]; then
 		msg "Compressing the prefix"
 		tar -cvzf "$CACHE_FOLDER/data.tgz" -C prefix .
 		echo "$ci_tarball" >"$CACHE_FOLDER/id.txt"

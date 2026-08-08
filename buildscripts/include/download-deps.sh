@@ -26,11 +26,10 @@ fi
 
 # ffmpeg
 if [ ! -d ffmpeg ]; then
-    if [ $IN_CI -eq 1 ]; then
-        git clone --branch $v_ci_ffmpeg --depth 1 https://github.com/FFmpeg/FFmpeg ffmpeg
-    else
-        git clone --depth 1 https://github.com/FFmpeg/FFmpeg ffmpeg
-    fi
+    git clone --branch "$v_ffmpeg" --depth 1 https://github.com/FFmpeg/FFmpeg ffmpeg
+else
+    git -C ffmpeg fetch --depth 1 origin "$v_ffmpeg"
+    git -C ffmpeg reset --hard FETCH_HEAD
 fi
 
 # freetype2
@@ -71,7 +70,14 @@ fi
 [ ! -d lua ] && git clone --depth 1 --branch v5-2 https://github.com/lua/lua
 
 # libplacebo
-[ ! -d libplacebo ] && git clone --depth 1 --recursive https://github.com/haasn/libplacebo
+if [ ! -d libplacebo ]; then
+	git clone --branch "$v_libplacebo" --depth 1 --recursive https://github.com/haasn/libplacebo
+else
+	git -C libplacebo fetch --depth 1 origin "$v_libplacebo"
+	git -C libplacebo reset --hard FETCH_HEAD
+	git -C libplacebo submodule sync --recursive
+	git -C libplacebo submodule update --init --recursive --depth 1
+fi
 
 # mpv
 if [ ! -d mpv ]; then
