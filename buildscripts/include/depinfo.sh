@@ -18,7 +18,7 @@ v_freetype=2.14.3
 v_libressl=4.3.2
 v_libxml2=2.15.3
 v_fontconfig=2.18.2
-v_ffmpeg=master
+v_ffmpeg=release/8.1
 v_libplacebo=master
 ## Dependency tree
 # I would've used a dict but putting arrays in a dict is not a thing
