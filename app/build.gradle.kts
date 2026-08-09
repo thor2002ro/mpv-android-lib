@@ -5,6 +5,9 @@ plugins {
 
 android {
     namespace = "is.xyz.mpv.test"
+    providers.gradleProperty("nativeNdkVersion").orNull?.let {
+        ndkVersion = it
+    }
     compileSdk {
         version = release(36)
     }

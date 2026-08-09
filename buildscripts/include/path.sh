@@ -9,12 +9,12 @@ os=linux
 export os
 
 if [ "$os" == "mac" ]; then
-	[ -z "$cores" ] && cores=$(sysctl -n hw.ncpu)
+	[ -z "${cores:-}" ] && cores=$(sysctl -n hw.ncpu)
 	# various things rely on GNU behaviour
 	export INSTALL=`which ginstall`
 	export SED=gsed
 else
-	[ -z "$cores" ] && cores=$(grep -c ^processor /proc/cpuinfo)
+	[ -z "${cores:-}" ] && cores=$(grep -c ^processor /proc/cpuinfo)
 fi
 cores=${cores:-4}
 
@@ -29,4 +29,5 @@ toolchain=$(echo "$DIR/sdk/android-ndk-${v_ndk}/toolchains/llvm/prebuilt/"*)
 [ -d "$toolchain" ] && \
 	export PATH="$toolchain/bin:$DIR/sdk/android-ndk-${v_ndk}:$DIR/sdk/bin:$PATH"
 export ANDROID_HOME="$DIR/sdk/android-sdk-$os"
+export ORG_GRADLE_PROJECT_nativeNdkVersion="$v_ndk_n"
 unset ANDROID_SDK_ROOT ANDROID_NDK_ROOT
