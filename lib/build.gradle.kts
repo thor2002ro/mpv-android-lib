@@ -15,6 +15,9 @@ group = "io.github.abdallahmehiz"
 
 android {
     namespace = "is.xyz.mpv"
+    providers.gradleProperty("nativeNdkVersion").orNull?.let {
+        ndkVersion = it
+    }
     compileSdk = 36
     defaultConfig {
         minSdk = 24
