@@ -434,6 +434,7 @@ class MPV(
     fun setConfigDir(configDir: String) {
         setOptionString("config", "yes")
         setOptionString("config-dir", configDir)
+        setOptionString("tls-ca-file", java.io.File(configDir, "cacert.pem").path)
     }
 
     companion object {

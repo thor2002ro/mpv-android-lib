@@ -24,12 +24,12 @@ cpuflags=
 
 args=(
 	--target-os=android --enable-cross-compile
-	--cross-prefix=$ndk_triple- --cc=$CC --pkg-config=pkg-config --nm=llvm-nm
+	--cross-prefix=$ndk_triple- --cc=$CC --pkg-config=pkg-config --pkg-config-flags=--static --nm=llvm-nm
 	--arch=${ndk_triple%%-*} --cpu=$cpu
 	--extra-cflags="-I$prefix_dir/include $cpuflags" --extra-ldflags="-L$prefix_dir/lib"
 
-	--enable-{jni,mediacodec,mbedtls,libdav1d,libxml2} --disable-vulkan
-	--disable-static --enable-shared --enable-{gpl,version3}
+	--enable-{jni,mediacodec,libtls,libdav1d,libxml2} --disable-vulkan
+	--disable-static --enable-shared --enable-{gpl,version3,nonfree}
 
 	# disable unneeded parts
 	--disable-{stripping,doc,programs}
