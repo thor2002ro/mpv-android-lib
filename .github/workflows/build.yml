@@ -21,16 +21,6 @@ jobs:
           java-version: '17'
           distribution: temurin
 
-      - name: Export env vars
-        run: buildscripts/include/ci.sh export >>$GITHUB_ENV
-
-      - uses: actions/cache@v4
-        with:
-          path: gh-cache/
-          key: "prefix-${{ hashFiles('buildscripts/**.sh') }}"
-          restore-keys: "prefix-"
-          enableCrossOsArchive: true
-
       - name: Install deps
         run: |
           sudo apt-get update
@@ -38,12 +28,7 @@ jobs:
           sudo pip3 install 'meson>=1.11'
 
       - name: Download deps
-        run: |
-          mkdir -p "$CACHE_FOLDER"
-          buildscripts/include/ci.sh install
-        env:
-          CACHE_MODE: "folder"
-          CACHE_FOLDER: "${{ github.workspace }}/gh-cache"
+        run: buildscripts/include/ci.sh install
 
       - name: Build the release artifacts
         run: |

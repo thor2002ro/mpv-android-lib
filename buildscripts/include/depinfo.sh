@@ -37,9 +37,3 @@ dep_lua=()
 dep_libplacebo=()
 dep_mpv=(ffmpeg libass lua libplacebo)
 dep_mpv_android=(mpv)
-
-
-## for CI workflow
-
-# filename used to uniquely identify a build prefix
-ci_tarball="prefix-ndk-${v_ndk}-meson-${v_meson}-lua-${v_lua}-unibreak-${v_unibreak}-harfbuzz-${v_harfbuzz}-fribidi-${v_fribidi}-freetype-${v_freetype}-libxml2-${v_libxml2}-fontconfig-${v_fontconfig}-mbedtls-${v_mbedtls}-ffmpeg-${v_ffmpeg}-libplacebo-${v_libplacebo}.tgz"

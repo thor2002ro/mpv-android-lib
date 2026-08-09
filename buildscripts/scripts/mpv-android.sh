@@ -47,7 +47,7 @@ if [ -z "$DONT_BUILD_RELEASE" ]; then
 	targets+=(assembleRelease)
 	[ -n "$BUNDLE" ] && targets+=(bundleRelease)
 fi
-./gradlew "${targets[@]}"
+./gradlew --no-daemon "${targets[@]}"
 
 if [ -n "$ANDROID_SIGNING_KEY" ]; then
 	cd "${MPV_ANDROID}/lib/build/outputs/apk"
