@@ -7,11 +7,11 @@
 
 mkdir -p deps && cd deps
 
-# mbedtls
-if [ ! -d mbedtls ]; then
-	mkdir mbedtls
-	$WGET https://github.com/Mbed-TLS/mbedtls/releases/download/mbedtls-$v_mbedtls/mbedtls-$v_mbedtls.tar.bz2 -O - | \
-		tar -xj -C mbedtls --strip-components=1
+# libressl
+if [ ! -d libressl ]; then
+	mkdir libressl
+	$WGET https://cdn.openbsd.org/pub/OpenBSD/LibreSSL/libressl-$v_libressl.tar.gz -O - | \
+		tar -xz -C libressl --strip-components=1
 fi
 
 # libxml2
@@ -31,7 +31,6 @@ else
     git -C ffmpeg fetch --depth 1 origin "$v_ffmpeg"
     git -C ffmpeg reset --hard FETCH_HEAD
 fi
-
 # freetype2
 [ ! -d freetype2 ] && git clone --depth 1 --recurse-submodules https://gitlab.freedesktop.org/freetype/freetype.git freetype2 -b VER-${v_freetype//./-}
 
