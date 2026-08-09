@@ -21,9 +21,6 @@ jobs:
           java-version: '17'
           distribution: temurin
 
-      - name: Export env vars
-        run: buildscripts/include/ci.sh export >>$GITHUB_ENV
-
       - name: Install deps
         run: |
           sudo apt-get update

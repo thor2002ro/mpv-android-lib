@@ -9,49 +9,19 @@ msg() {
 	printf '==> %s\n' "$1"
 }
 
-fetch_prefix() {
-	# A moving FFmpeg branch must be rebuilt instead of restored from cache.
-	if [[ "$v_ffmpeg" == master || "$v_libplacebo" == master ]]; then
-		return 1
-	fi
-	if [[ "$CACHE_MODE" == folder ]]; then
-		local text=
-		if [ -f "$CACHE_FOLDER/id.txt" ]; then
-			text=$(cat "$CACHE_FOLDER/id.txt")
-		else
-			echo "Cache seems to be empty"
-		fi
-		printf 'Expecting "%s",\nfound     "%s".\n' "$ci_tarball" "$text"
-		if [[ "$text" == "$ci_tarball" ]]; then
-			tar -xzf "$CACHE_FOLDER/data.tgz" -C prefix && return 0
-		fi
-	fi
-	return 1
-}
-
 build_prefix() {
-	msg "Building the prefix ($ci_tarball)..."
+	msg "Building the dependency prefix from source..."
 
 	msg "Fetching deps"
 	IN_CI=1 ./include/download-deps.sh
 
 	msg "Compiling"
 	./buildall.sh --only-deps mpv
-
-	if [[ "$v_ffmpeg" != master && "$v_libplacebo" != master && "$CACHE_MODE" == folder && -w "$CACHE_FOLDER" ]]; then
-		msg "Compressing the prefix"
-		tar -cvzf "$CACHE_FOLDER/data.tgz" -C prefix .
-		echo "$ci_tarball" >"$CACHE_FOLDER/id.txt"
-	fi
 }
 
 export WGET="wget --progress=bar:force"
 
-if [ "$1" = "export" ]; then
-	# export variable with unique cache identifier
-	echo "CACHE_IDENTIFIER=$ci_tarball"
-	exit 0
-elif [ "$1" = "install" ]; then
+if [ "$1" = "install" ]; then
 	# install deps
 	if [[ -n "$ANDROID_HOME" && -d "$ANDROID_HOME" ]]; then
 		msg "Linking existing SDK"
@@ -68,9 +38,10 @@ elif [ "$1" = "install" ]; then
 	tar -xzf master.tgz -C deps/mpv --strip-components=1
 	rm master.tgz
 
-	msg "Trying to fetch existing prefix"
+	msg "Preparing an empty dependency prefix"
+	rm -rf prefix
 	mkdir -p prefix
-	fetch_prefix || build_prefix
+	build_prefix
 	exit 0
 elif [ "$1" = "build" ]; then
 	# run build
