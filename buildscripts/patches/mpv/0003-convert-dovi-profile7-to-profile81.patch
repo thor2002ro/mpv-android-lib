@@ -1,0 +1,592 @@
+diff --git a/demux/demux_lavf.c b/demux/demux_lavf.c
+index 4d91983e1..f17696fb2 100644
+--- a/demux/demux_lavf.c
++++ b/demux/demux_lavf.c
+@@ -38,6 +38,8 @@
+ #include <libavutil/pixdesc.h>
+ #include <libavutil/replaygain.h>
+
++#include <dovi.h>
++
+ #include "audio/chmap_avchannel.h"
+
+ #include "common/common.h"
+@@ -53,6 +55,7 @@
+
+ #include "demux.h"
+ #include "dovi_split.h"
++#include "dovi_profile_convert.h"
+ #include "stheader.h"
+ #include "options/m_config.h"
+ #include "options/m_option.h"
+@@ -227,6 +230,12 @@ struct stream_info {
+     double highest_pts;
+     double ts_offset;
+     struct mp_dovi_split *dovi_split;
++    bool dovi_transform;
++    bool dovi_setup_failed;
++    dovi_transform_request dovi_request;
++    uint64_t dovi_generation;
++    uint32_t dovi_source_base;
++    AVDOVIDecoderConfigurationRecord dovi_source_config;
+ };
+
+ typedef struct lavf_priv {
+@@ -704,6 +712,11 @@ static void handle_new_stream(demuxer_t *demuxer, int i)
+     struct sh_stream *sh = NULL;
+     AVCodecParameters *codec = st->codecpar;
+     int lavc_delay = codec->initial_padding;
++    bool dovi_transform = false;
++    dovi_transform_request dovi_request = {0};
++    uint64_t dovi_generation = 0;
++    uint32_t dovi_source_base = DOVI_PRESENTATION_UNKNOWN;
++    const AVDOVIDecoderConfigurationRecord *dovi_config = NULL;
+
+     switch (codec->codec_type) {
+     case AVMEDIA_TYPE_AUDIO: {
+@@ -779,12 +791,23 @@ static void handle_new_stream(demuxer_t *demuxer, int i)
+
+         if ((sd = mp_av_stream_get_side_data(st, AV_PKT_DATA_DOVI_CONF))) {
+             const AVDOVIDecoderConfigurationRecord *cfg = (void *) sd;
++            dovi_config = cfg;
+             MP_VERBOSE(demuxer, "Found Dolby Vision config record: profile "
+                        "%d level %d\n", cfg->dv_profile, cfg->dv_level);
+             sh->codec->dovi = true;
+             sh->codec->dv_profile = cfg->dv_profile;
+             sh->codec->dv_level = cfg->dv_level;
+             sh->codec->dv_el_present = cfg->bl_present_flag && cfg->el_present_flag;
++            dovi_transform = codec->codec_id == AV_CODEC_ID_HEVC &&
++                             dovi_get_mpv_request_v3(&dovi_request,
++                                                  &dovi_generation) != 0;
++            if (cfg->dv_profile == 7 ||
++                (cfg->dv_profile == 8 &&
++                 cfg->dv_bl_signal_compatibility_id == 1))
++                dovi_source_base = DOVI_PRESENTATION_HDR10;
++            else if (cfg->dv_profile == 8 &&
++                     cfg->dv_bl_signal_compatibility_id == 4)
++                dovi_source_base = DOVI_PRESENTATION_HLG;
+         }
+
+         // AVI uses decode-order indices as DTS and needs the compensation.
+@@ -830,6 +852,12 @@ static void handle_new_stream(demuxer_t *demuxer, int i)
+         .sh = sh,
+         .last_key_pts = MP_NOPTS_VALUE,
+         .highest_pts = MP_NOPTS_VALUE,
++        .dovi_transform = dovi_transform,
++        .dovi_request = dovi_request,
++        .dovi_generation = dovi_generation,
++        .dovi_source_base = dovi_source_base,
++        .dovi_source_config = dovi_config ? *dovi_config :
++            (AVDOVIDecoderConfigurationRecord){0},
+     };
+     mp_assert(priv->num_streams == i); // directly mapped
+     MP_TARRAY_APPEND(priv, priv->streams, priv->num_streams, info);
+@@ -841,6 +868,13 @@ static void handle_new_stream(demuxer_t *demuxer, int i)
+         sh->codec->lav_codecpar = avcodec_parameters_alloc();
+         if (sh->codec->lav_codecpar)
+             avcodec_parameters_copy(sh->codec->lav_codecpar, codec);
++        if (info->dovi_transform &&
++            !mp_dovi_prepare_stream(sh, &info->dovi_source_config,
++                                    &info->dovi_request))
++        {
++            info->dovi_setup_failed = true;
++            dovi_record_mpv_error_v3(info->dovi_generation, DOVI_INTERNAL_ERROR);
++        }
+         sh->codec->native_tb_num = st->time_base.num;
+         sh->codec->native_tb_den = st->time_base.den;
+         sh->codec->duration = st->duration * av_q2d(st->time_base);
+@@ -1737,6 +1771,17 @@ static bool demux_lavf_read_packet(struct demuxer *demux,
+     }
+     av_packet_free(&pkt);
+
++    if (info->dovi_setup_failed ||
++        (info->dovi_transform &&
++         !mp_dovi_transform_packet(demux, &dp, &info->dovi_request,
++                                   info->dovi_generation,
++                                   info->dovi_source_base,
++                                   &info->dovi_source_config)))
++    {
++        talloc_free(dp);
++        return false;
++    }
++
+     if (priv->format_hack.clear_filepos)
+         dp->pos = -1;
+
+diff --git a/demux/demux_mkv.c b/demux/demux_mkv.c
+index e9159d752..7d631e85a 100644
+--- a/demux/demux_mkv.c
++++ b/demux/demux_mkv.c
+@@ -37,6 +37,8 @@
+ #include <libavcodec/avcodec.h>
+ #include <libavcodec/version.h>
+
++#include <dovi.h>
++
+ #include <libplacebo/utils/libav.h>
+
+ #include "config.h"
+@@ -56,6 +58,7 @@
+ #include "video/mp_image.h"
+ #include "demux.h"
+ #include "dovi_split.h"
++#include "dovi_profile_convert.h"
+ #include "packet_pool.h"
+ #include "stheader.h"
+ #include "ebml.h"
+@@ -169,6 +172,10 @@ typedef struct mkv_track {
+     AVDOVIDecoderConfigurationRecord *dovi_config;
+     bstr hvce;
+     struct mp_dovi_split *dovi_split;
++    bool dovi_transform;
++    dovi_transform_request dovi_request;
++    uint64_t dovi_generation;
++    uint32_t dovi_source_base;
+ } mkv_track_t;
+
+ typedef struct mkv_index {
+@@ -238,6 +244,7 @@ typedef struct mkv_demuxer {
+     int num_packets;
+
+     bool probably_webm_dash_init;
++    bool dovi_transform_failed;
+ } mkv_demuxer_t;
+
+ #define OPT_BASE_STRUCT struct demux_mkv_opts
+@@ -1809,6 +1816,24 @@ static int demux_mkv_open_video(demuxer_t *demuxer, mkv_track_t *track, int idx)
+         sh_v->dv_profile = track->dovi_config->dv_profile;
+         sh_v->dv_el_present = track->dovi_config->bl_present_flag &&
+                               track->dovi_config->el_present_flag;
++        track->dovi_transform =
++            strcmp(track->codec_id, "V_MPEGH/ISO/HEVC") == 0 &&
++            dovi_get_mpv_request_v3(&track->dovi_request,
++                                 &track->dovi_generation) != 0;
++        if (track->dovi_config->dv_profile == 7 ||
++            (track->dovi_config->dv_profile == 8 &&
++             track->dovi_config->dv_bl_signal_compatibility_id == 1))
++            track->dovi_source_base = DOVI_PRESENTATION_HDR10;
++        else if (track->dovi_config->dv_profile == 8 &&
++                 track->dovi_config->dv_bl_signal_compatibility_id == 4)
++            track->dovi_source_base = DOVI_PRESENTATION_HLG;
++        if (track->dovi_transform &&
++            !mp_dovi_prepare_stream(track->stream, track->dovi_config,
++                                    &track->dovi_request))
++        {
++            dovi_record_mpv_error_v3(track->dovi_generation, DOVI_INTERNAL_ERROR);
++            ((mkv_demuxer_t *)demuxer->priv)->dovi_transform_failed = true;
++        }
+     }
+
+ #if LIBAVCODEC_VERSION_INT >= AV_VERSION_INT(62, 35, 100)
+@@ -2925,6 +2949,17 @@ static void mkv_parse_and_add_packet(demuxer_t *demuxer, mkv_track_t *track,
+ {
+     struct sh_stream *stream = track->stream;
+
++    if (track->dovi_transform &&
++        !mp_dovi_transform_packet(demuxer, &dp, &track->dovi_request,
++                                  track->dovi_generation,
++                                  track->dovi_source_base,
++                                  track->dovi_config))
++    {
++        talloc_free(dp);
++        ((mkv_demuxer_t *)demuxer->priv)->dovi_transform_failed = true;
++        return;
++    }
++
+     if (stream->type == STREAM_AUDIO && handle_realaudio(demuxer, track, dp))
+         return;
+
+@@ -3424,6 +3458,8 @@ static bool demux_mkv_read_packet(struct demuxer *demuxer,
+     struct mkv_demuxer *mkv_d = demuxer->priv;
+
+     for (;;) {
++        if (mkv_d->dovi_transform_failed)
++            return false;
+         if (mkv_d->num_packets) {
+             *pkt = mkv_d->packets[0];
+             MP_TARRAY_REMOVE_AT(mkv_d->packets, mkv_d->num_packets, 0);
+diff --git a/demux/dovi_profile_convert.c b/demux/dovi_profile_convert.c
+new file mode 100644
+index 000000000..2ecc5b9cd
+--- /dev/null
++++ b/demux/dovi_profile_convert.c
+@@ -0,0 +1,320 @@
++#include <stddef.h>
++#include <stdint.h>
++#include <string.h>
++
++#include <libavcodec/codec_par.h>
++#include <libavcodec/packet.h>
++#include <libavutil/dovi_meta.h>
++#include <libavutil/intreadwrite.h>
++
++#include <dovi.h>
++
++#include "common/common.h"
++#include "demux.h"
++#include "dovi_profile_convert.h"
++#include "packet.h"
++#include "stheader.h"
++
++static uint32_t packet_source_base(struct demux_packet *packet,
++                                   uint32_t configured_base)
++{
++    size_t size = 0;
++    if (av_packet_get_side_data(packet->avpacket,
++                               AV_PKT_DATA_DYNAMIC_HDR10_PLUS, &size))
++        return DOVI_PRESENTATION_HDR10_PLUS;
++    return configured_base;
++}
++
++static AVDOVIDecoderConfigurationRecord normalized_config(
++    const AVDOVIDecoderConfigurationRecord *source)
++{
++    AVDOVIDecoderConfigurationRecord cfg = {0};
++    if (source)
++        cfg = *source;
++    if (cfg.dv_version_major == 0)
++        cfg.dv_version_major = 1;
++    cfg.rpu_present_flag = 1;
++    cfg.bl_present_flag = 1;
++    return cfg;
++}
++
++static bool configure_presentation(AVDOVIDecoderConfigurationRecord *cfg,
++                                   uint32_t presentation)
++{
++    cfg->rpu_present_flag = 1;
++    cfg->bl_present_flag = 1;
++    cfg->el_present_flag = 0;
++
++    switch (presentation) {
++    case DOVI_PRESENTATION_PROFILE_5:
++        cfg->dv_profile = 5;
++        cfg->dv_bl_signal_compatibility_id = 0;
++        return true;
++    case DOVI_PRESENTATION_PROFILE_7_MEL:
++    case DOVI_PRESENTATION_PROFILE_7_FEL:
++        cfg->dv_profile = 7;
++        cfg->el_present_flag = 1;
++        if (cfg->dv_bl_signal_compatibility_id == 0)
++            cfg->dv_bl_signal_compatibility_id = 6;
++        return true;
++    case DOVI_PRESENTATION_PROFILE_8_1:
++        cfg->dv_profile = 8;
++        cfg->dv_bl_signal_compatibility_id = 1;
++        return true;
++    case DOVI_PRESENTATION_PROFILE_8_4:
++        cfg->dv_profile = 8;
++        cfg->dv_bl_signal_compatibility_id = 4;
++        return true;
++    default:
++        return false;
++    }
++}
++
++static uint32_t source_presentation(
++    const AVDOVIDecoderConfigurationRecord *source)
++{
++    if (!source)
++        return DOVI_PRESENTATION_UNKNOWN;
++    switch (source->dv_profile) {
++    case 5:
++        return DOVI_PRESENTATION_PROFILE_5;
++    case 7:
++        return DOVI_PRESENTATION_PROFILE_7_FEL;
++    case 8:
++        if (source->dv_bl_signal_compatibility_id == 1)
++            return DOVI_PRESENTATION_PROFILE_8_1;
++        if (source->dv_bl_signal_compatibility_id == 4)
++            return DOVI_PRESENTATION_PROFILE_8_4;
++        return DOVI_PRESENTATION_UNKNOWN;
++    default:
++        return DOVI_PRESENTATION_UNKNOWN;
++    }
++}
++
++static uint32_t requested_presentation(
++    const dovi_transform_request *request,
++    const AVDOVIDecoderConfigurationRecord *source)
++{
++    switch (request->target) {
++    case DOVI_TARGET_LOSSLESS_REWRITE:
++        return source_presentation(source);
++    case DOVI_TARGET_MEL:
++        return DOVI_PRESENTATION_PROFILE_7_MEL;
++    case DOVI_TARGET_PROFILE_8_1:
++    case DOVI_TARGET_PROFILE_8_1_PRESERVE_MAPPING:
++        return DOVI_PRESENTATION_PROFILE_8_1;
++    case DOVI_TARGET_PROFILE_8_4:
++        return DOVI_PRESENTATION_PROFILE_8_4;
++    case DOVI_TARGET_SOURCE_BASE_PRESENTATION:
++        return DOVI_PRESENTATION_UNKNOWN;
++    default:
++        return DOVI_PRESENTATION_UNKNOWN;
++    }
++}
++
++static void remove_side_data(AVPacketSideData *side_data, int *count,
++                             enum AVPacketSideDataType type)
++{
++    av_packet_side_data_remove(side_data, count, type);
++}
++
++bool mp_dovi_prepare_stream(
++    struct sh_stream *stream,
++    const AVDOVIDecoderConfigurationRecord *source_config,
++    const dovi_transform_request *request)
++{
++    if (!stream || !stream->codec || !source_config || !request)
++        return false;
++
++    AVCodecParameters *codecpar = stream->codec->lav_codecpar;
++    if (request->target == DOVI_TARGET_SOURCE_BASE_PRESENTATION) {
++        stream->codec->dovi = false;
++        stream->codec->dv_profile = 0;
++        stream->codec->dv_level = 0;
++        stream->codec->dv_el_present = false;
++        if (codecpar)
++            remove_side_data(codecpar->coded_side_data,
++                             &codecpar->nb_coded_side_data,
++                             AV_PKT_DATA_DOVI_CONF);
++        return true;
++    }
++
++    const uint32_t presentation = requested_presentation(request, source_config);
++    AVDOVIDecoderConfigurationRecord cfg = normalized_config(source_config);
++    if (request->target != DOVI_TARGET_LOSSLESS_REWRITE &&
++        !configure_presentation(&cfg, presentation))
++        return false;
++
++    if (codecpar) {
++        const AVPacketSideData *existing = av_packet_side_data_get(
++            codecpar->coded_side_data, codecpar->nb_coded_side_data,
++            AV_PKT_DATA_DOVI_CONF);
++        if (existing) {
++            if (existing->size < sizeof(cfg))
++                return false;
++            memcpy(existing->data, &cfg, sizeof(cfg));
++        } else {
++            AVPacketSideData *created = av_packet_side_data_new(
++                &codecpar->coded_side_data, &codecpar->nb_coded_side_data,
++                AV_PKT_DATA_DOVI_CONF, sizeof(cfg), 0);
++            if (!created)
++                return false;
++            memcpy(created->data, &cfg, sizeof(cfg));
++        }
++    }
++
++    stream->codec->dovi = true;
++    stream->codec->dv_profile = cfg.dv_profile;
++    stream->codec->dv_level = cfg.dv_level;
++    stream->codec->dv_el_present = cfg.bl_present_flag && cfg.el_present_flag;
++    return true;
++}
++
++static bool output_matches_request(uint32_t output,
++                                   uint32_t source_base,
++                                   const dovi_transform_request *request,
++                                   const AVDOVIDecoderConfigurationRecord *source_config)
++{
++    switch (request->target) {
++    case DOVI_TARGET_LOSSLESS_REWRITE:
++        if (source_config->dv_profile == 7)
++            return output == DOVI_PRESENTATION_PROFILE_7_MEL ||
++                   output == DOVI_PRESENTATION_PROFILE_7_FEL;
++        return output == source_presentation(source_config);
++    case DOVI_TARGET_MEL:
++        return output == DOVI_PRESENTATION_PROFILE_7_MEL;
++    case DOVI_TARGET_PROFILE_8_1:
++    case DOVI_TARGET_PROFILE_8_1_PRESERVE_MAPPING:
++        return output == DOVI_PRESENTATION_PROFILE_8_1;
++    case DOVI_TARGET_PROFILE_8_4:
++        return output == DOVI_PRESENTATION_PROFILE_8_4;
++    case DOVI_TARGET_SOURCE_BASE_PRESENTATION:
++        return source_base != DOVI_PRESENTATION_UNKNOWN && output == source_base;
++    default:
++        return false;
++    }
++}
++
++static bool update_packet_presentation(
++    struct demux_packet *packet,
++    uint32_t presentation,
++    const AVDOVIDecoderConfigurationRecord *source_config,
++    const dovi_transform_request *request)
++{
++    if (presentation == DOVI_PRESENTATION_HDR10 ||
++        presentation == DOVI_PRESENTATION_HDR10_PLUS ||
++        presentation == DOVI_PRESENTATION_HLG)
++    {
++        remove_side_data(packet->avpacket->side_data,
++                         &packet->avpacket->side_data_elems,
++                         AV_PKT_DATA_DOVI_CONF);
++        return true;
++    }
++
++    AVDOVIDecoderConfigurationRecord cfg = normalized_config(source_config);
++    if (request->target != DOVI_TARGET_LOSSLESS_REWRITE &&
++        !configure_presentation(&cfg, presentation))
++        return false;
++
++    size_t size = 0;
++    uint8_t *data = av_packet_get_side_data(
++        packet->avpacket, AV_PKT_DATA_DOVI_CONF, &size);
++    if (data && size < sizeof(cfg)) {
++        remove_side_data(packet->avpacket->side_data,
++                         &packet->avpacket->side_data_elems,
++                         AV_PKT_DATA_DOVI_CONF);
++        data = NULL;
++    }
++    if (!data) {
++        data = av_packet_new_side_data(packet->avpacket,
++                                       AV_PKT_DATA_DOVI_CONF,
++                                       sizeof(cfg));
++        if (!data)
++            return false;
++    }
++    memcpy(data, &cfg, sizeof(cfg));
++    return true;
++}
++
++bool mp_dovi_transform_packet(
++    struct demuxer *demuxer,
++    struct demux_packet **packet,
++    const dovi_transform_request *request,
++    uint64_t generation,
++    uint32_t source_base_presentation,
++    const AVDOVIDecoderConfigurationRecord *source_config)
++{
++    struct demux_packet *source = *packet;
++    const uint8_t *supplemental = NULL;
++    size_t supplemental_size = 0;
++    size_t side_data_size = 0;
++    const uint8_t *side_data = av_packet_get_side_data(
++        source->avpacket, AV_PKT_DATA_MATROSKA_BLOCKADDITIONAL, &side_data_size);
++    if (side_data && side_data_size > 8 && AV_RB64(side_data) == 1) {
++        supplemental = side_data + 8;
++        supplemental_size = side_data_size - 8;
++    }
++
++    const dovi_sample sample = {
++        .struct_size = sizeof(sample),
++        .framing = DOVI_FRAMING_AUTO,
++        .source_base_presentation = packet_source_base(source,
++                                                        source_base_presentation),
++        .data = source->buffer,
++        .data_size = source->len,
++        .supplemental_rpu = supplemental,
++        .supplemental_rpu_size = supplemental_size,
++    };
++    dovi_transform_info info = {0};
++    dovi_owned_buffer output = {0};
++    dovi_status status = dovi_transform_sample_alloc(&sample, request,
++                                                     &output, &info);
++    if (status != DOVI_OK)
++        goto fail;
++    if (output.size == 0 || output.size > SIZE_MAX ||
++        !output_matches_request(info.output_presentation,
++                                sample.source_base_presentation,
++                                request, source_config))
++    {
++        status = DOVI_INTERNAL_ERROR;
++        goto fail;
++    }
++
++    struct demux_packet *converted = new_demux_packet(demuxer->packet_pool,
++                                                       output.size);
++    if (!converted) {
++        status = DOVI_INTERNAL_ERROR;
++        goto fail;
++    }
++
++    memcpy(converted->buffer, output.data, output.size);
++    if (av_packet_copy_props(converted->avpacket, source->avpacket) < 0 ||
++        !update_packet_presentation(converted,
++                                    info.output_presentation,
++                                    source_config, request))
++    {
++        talloc_free(converted);
++        status = DOVI_INTERNAL_ERROR;
++        goto fail;
++    }
++
++    if (supplemental)
++        remove_side_data(converted->avpacket->side_data,
++                         &converted->avpacket->side_data_elems,
++                         AV_PKT_DATA_MATROSKA_BLOCKADDITIONAL);
++
++    demux_packet_copy_attribs(converted, source);
++    dovi_record_mpv_transform_v3(generation,
++                                 info.input_presentation,
++                                 info.output_presentation);
++    dovi_owned_buffer_free(&output);
++    talloc_free(source);
++    *packet = converted;
++    return true;
++
++fail:
++    dovi_owned_buffer_free(&output);
++    dovi_record_mpv_error_v3(generation, status);
++    MP_ERR(demuxer, "Dolby Vision transform failed with status %d\n", status);
++    return false;
++}
+diff --git a/demux/dovi_profile_convert.h b/demux/dovi_profile_convert.h
+new file mode 100644
+index 000000000..29dab67ff
+--- /dev/null
++++ b/demux/dovi_profile_convert.h
+@@ -0,0 +1,25 @@
++#ifndef MP_DOVI_PROFILE_CONVERT_H
++#define MP_DOVI_PROFILE_CONVERT_H
++
++#include <stdbool.h>
++
++#include <dovi.h>
++
++struct demux_packet;
++struct demuxer;
++struct sh_stream;
++struct AVDOVIDecoderConfigurationRecord;
++
++bool mp_dovi_prepare_stream(
++    struct sh_stream *stream,
++    const struct AVDOVIDecoderConfigurationRecord *source_config,
++    const dovi_transform_request *request);
++
++bool mp_dovi_transform_packet(struct demuxer *demuxer,
++                              struct demux_packet **packet,
++                              const dovi_transform_request *request,
++                              uint64_t generation,
++                              uint32_t source_base_presentation,
++                              const struct AVDOVIDecoderConfigurationRecord *source_config);
++
++#endif
+diff --git a/meson.build b/meson.build
+index e57190437..e3136005d 100644
+--- a/meson.build
++++ b/meson.build
+@@ -26,6 +26,7 @@ libavformat = dependency('libavformat', version: '>= 60.16.100')
+ libavutil = dependency('libavutil', version: '>= 58.29.100')
+ libswresample = dependency('libswresample', version: '>= 4.12.100')
+ libswscale = dependency('libswscale', version: '>= 7.5.100')
++jellyfin_dovi = dependency('jellyfin-dovi')
+
+ libplacebo = dependency('libplacebo', version: '>=7.360.1',
+                 default_options: ['default_library=static', 'demos=false'])
+@@ -40,6 +41,7 @@ dependencies = [libass,
+                 libavformat,
+                 libavutil,
+                 libplacebo,
++                jellyfin_dovi,
+                 libswresample,
+                 libswscale]
+
+@@ -108,6 +110,7 @@ sources = files(
+     'demux/demux_raw.c',
+     'demux/demux_timeline.c',
+     'demux/dovi_split.c',
++    'demux/dovi_profile_convert.c',
+     'demux/ebml.c',
+     'demux/packet.c',
+     'demux/packet_pool.c',
