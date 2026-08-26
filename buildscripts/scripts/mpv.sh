@@ -2,6 +2,16 @@
 
 . ../../include/path.sh
 
+bash ../../scripts/import-libdovi-android-sdk.sh
+if ! pkg-config --validate jellyfin-dovi; then
+	echo "Invalid jellyfin-dovi pkg-config metadata." >&2
+	exit 1
+fi
+if ! pkg-config --exists jellyfin-dovi; then
+	pkg-config --print-errors --exists jellyfin-dovi >&2
+	exit 1
+fi
+
 build=_build$ndk_suffix
 
 if [ "$1" == "build" ]; then
