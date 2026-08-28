@@ -81,10 +81,11 @@ index 4d91983e1..f17696fb2 100644
      };
      mp_assert(priv->num_streams == i); // directly mapped
      MP_TARRAY_APPEND(priv, priv->streams, priv->num_streams, info);
-@@ -841,6 +868,13 @@ static void handle_new_stream(demuxer_t *demuxer, int i)
-         sh->codec->lav_codecpar = avcodec_parameters_alloc();
-         if (sh->codec->lav_codecpar)
-             avcodec_parameters_copy(sh->codec->lav_codecpar, codec);
+@@ -848,7 +875,14 @@ static void handle_new_stream(demuxer_t *demuxer, int i)
+         talloc_set_destructor(lavp, avcodec_par_destructor);
+         *lavp = avcodec_parameters_alloc();
+         if (*lavp && avcodec_parameters_copy(*lavp, codec) >= 0)
+             sh->codec->lav_codecpar = *lavp;
 +        if (info->dovi_transform &&
 +            !mp_dovi_prepare_stream(sh, &info->dovi_source_config,
 +                                    &info->dovi_request))
@@ -210,13 +211,14 @@ new file mode 100644
 index 000000000..2ecc5b9cd
 --- /dev/null
 +++ b/demux/dovi_profile_convert.c
-@@ -0,0 +1,320 @@
+@@ -0,0 +1,339 @@
 +#include <stddef.h>
 +#include <stdint.h>
 +#include <string.h>
 +
 +#include <libavcodec/codec_par.h>
 +#include <libavcodec/packet.h>
++#include <libavutil/buffer.h>
 +#include <libavutil/dovi_meta.h>
 +#include <libavutil/intreadwrite.h>
 +
@@ -227,6 +229,13 @@ index 000000000..2ecc5b9cd
 +#include "dovi_profile_convert.h"
 +#include "packet.h"
 +#include "stheader.h"
++
++static void free_dovi_output(void *opaque, uint8_t *data)
++{
++    (void)opaque;
++    dovi_owned_buffer output = {.data = data};
++    dovi_owned_buffer_free(&output);
++}
 +
 +static uint32_t packet_source_base(struct demux_packet *packet,
 +                                   uint32_t configured_base)
@@ -480,11 +489,13 @@ index 000000000..2ecc5b9cd
 +    };
 +    dovi_transform_info info = {0};
 +    dovi_owned_buffer output = {0};
++    struct demux_packet *converted = NULL;
 +    dovi_status status = dovi_transform_sample_alloc(&sample, request,
 +                                                     &output, &info);
 +    if (status != DOVI_OK)
 +        goto fail;
-+    if (output.size == 0 || output.size > SIZE_MAX ||
++    if (output.size == 0 ||
++        output.size > SIZE_MAX - DOVI_OUTPUT_PADDING_SIZE ||
 +        !output_matches_request(info.output_presentation,
 +                                sample.source_base_presentation,
 +                                request, source_config))
@@ -493,20 +504,28 @@ index 000000000..2ecc5b9cd
 +        goto fail;
 +    }
 +
-+    struct demux_packet *converted = new_demux_packet(demuxer->packet_pool,
-+                                                       output.size);
++    const size_t output_size = output.size;
++    AVBufferRef *buffer = av_buffer_create(
++        output.data, output_size,
++        free_dovi_output, NULL, 0);
++    if (!buffer) {
++        status = DOVI_INTERNAL_ERROR;
++        goto fail;
++    }
++    output.data = NULL;
++    output.size = 0;
++    converted = new_demux_packet_from_buf(demuxer->packet_pool, buffer);
++    av_buffer_unref(&buffer);
 +    if (!converted) {
 +        status = DOVI_INTERNAL_ERROR;
 +        goto fail;
 +    }
 +
-+    memcpy(converted->buffer, output.data, output.size);
 +    if (av_packet_copy_props(converted->avpacket, source->avpacket) < 0 ||
 +        !update_packet_presentation(converted,
 +                                    info.output_presentation,
 +                                    source_config, request))
 +    {
-+        talloc_free(converted);
 +        status = DOVI_INTERNAL_ERROR;
 +        goto fail;
 +    }
@@ -526,6 +545,7 @@ index 000000000..2ecc5b9cd
 +    return true;
 +
 +fail:
++    talloc_free(converted);
 +    dovi_owned_buffer_free(&output);
 +    dovi_record_mpv_error_v3(generation, status);
 +    MP_ERR(demuxer, "Dolby Vision transform failed with status %d\n", status);
