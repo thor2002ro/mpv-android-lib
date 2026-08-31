@@ -42,6 +42,8 @@ $BUILD/scripts/write_versions.sh $ndk_suffix
 PREFIX32=$prefix32 PREFIX64=$prefix64 PREFIX_X64=$prefix_x64 PREFIX_X86=$prefix_x86 \
 ndk-build -C lib/src/main -j$cores || exit $?
 
+"$BUILD/scripts/stage-ffmpeg-provider.sh" "$MPV_ANDROID" "$v_ndk_n"
+
 targets=(assembleDebug)
 if [ -z "$DONT_BUILD_RELEASE" ]; then
 	targets+=(assembleRelease)
