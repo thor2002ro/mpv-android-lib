@@ -38,6 +38,7 @@ android {
 }
 
 dependencies {
+    api(project(":ffmpeg"))
     implementation("androidx.appcompat:appcompat:1.8.0")
 }
 
