@@ -49,37 +49,67 @@ for arch in armv7l arm64 x86 x86_64; do
 done
 ./buildall.sh -n mpv-android
 
-mapfile -t aars < <(find "$work_dir/lib/build/outputs/aar" -maxdepth 1 -name '*-release.aar' -type f)
-(( ${#aars[@]} == 1 )) || {
-	echo "Expected one release AAR, found ${#aars[@]}." >&2
+mapfile -t mpv_aars < <(find "$work_dir/lib/build/outputs/aar" -maxdepth 1 -name '*-release.aar' -type f)
+(( ${#mpv_aars[@]} == 1 )) || {
+	echo "Expected one MPV release AAR, found ${#mpv_aars[@]}." >&2
+	exit 1
+}
+mapfile -t provider_aars < <(find "$work_dir/ffmpeg/build/outputs/aar" -maxdepth 1 -name '*-release.aar' -type f)
+(( ${#provider_aars[@]} == 1 )) || {
+	echo "Expected one FFmpeg provider release AAR, found ${#provider_aars[@]}." >&2
+	exit 1
+}
+mpv_aar="${mpv_aars[0]}"
+provider_aar="${provider_aars[0]}"
+
+cd "$work_dir"
+./gradlew --no-daemon \
+	:lib:generatePomFileForMavenPublication \
+	:ffmpeg:generatePomFileForMavenPublication
+mpv_pom="$work_dir/lib/build/publications/maven/pom-default.xml"
+provider_pom="$work_dir/ffmpeg/build/publications/maven/pom-default.xml"
+mpv_version=$(sed -n 's|.*<version>\([^<]*\)</version>.*|\1|p' "$mpv_pom" | head -n 1)
+provider_version=$(sed -n 's|.*<version>\([^<]*\)</version>.*|\1|p' "$provider_pom" | head -n 1)
+[[ -n "$mpv_version" ]] || {
+	echo "Couldn't read the MPV library version from $mpv_pom." >&2
+	exit 1
+}
+[[ "$provider_version" =~ ^[0-9]+\.[0-9]+(\.[0-9]+)?-thor\.[0-9a-f]{12}$ ]] || {
+	echo "Couldn't read a commit-pinned provider version from $provider_pom." >&2
 	exit 1
 }
 
-cd "$work_dir"
-./gradlew --no-daemon :lib:generatePomFileForMavenPublication
-pom="$work_dir/lib/build/publications/maven/pom-default.xml"
-version=$(sed -n 's|.*<version>\([^<]*\)</version>.*|\1|p' "$pom" | head -n 1)
-[[ -n "$version" ]] || {
-	echo "Couldn't read the library version from $pom." >&2
+jar --update --file "$provider_aar" \
+	-C "$work_dir/ffmpeg/src/main/generated" META-INF \
+	-C "$work_dir/ffmpeg/src/main/generated" prefab
+"$repo_dir/buildscripts/scripts/validate-ffmpeg-provider-aar.sh" "$provider_aar"
+"$repo_dir/buildscripts/scripts/validate-dovi-aar.sh" "$mpv_aar"
+grep -Fq '<artifactId>mpv-ffmpeg-android</artifactId>' "$mpv_pom" || {
+	echo "MPV POM does not depend on the FFmpeg provider." >&2
+	exit 1
+}
+grep -Fq "<version>$provider_version</version>" "$mpv_pom" || {
+	echo "MPV POM does not pin FFmpeg provider $provider_version." >&2
 	exit 1
 }
 
 maven_root="$repo_dir/OUTPUT/maven"
-module_root="$maven_root/io/github/abdallahmehiz/mpv-android-lib"
-maven_dir="$module_root/$version"
-staging_dir="$work_dir/maven-stage/$version"
-mkdir -p "$staging_dir"
-cp "${aars[0]}" "$staging_dir/mpv-android-lib-$version.aar"
-cp "$pom" "$staging_dir/mpv-android-lib-$version.pom"
-"$repo_dir/buildscripts/scripts/validate-dovi-aar.sh" "$staging_dir/mpv-android-lib-$version.aar"
+mpv_staging_dir="$work_dir/maven-stage/io/github/abdallahmehiz/mpv-android-lib/$mpv_version"
+provider_staging_dir="$work_dir/maven-stage/io/github/abdallahmehiz/mpv-ffmpeg-android/$provider_version"
+mkdir -p "$mpv_staging_dir" "$provider_staging_dir"
+cp "$mpv_aar" "$mpv_staging_dir/mpv-android-lib-$mpv_version.aar"
+cp "$mpv_pom" "$mpv_staging_dir/mpv-android-lib-$mpv_version.pom"
+cp "$provider_aar" "$provider_staging_dir/mpv-ffmpeg-android-$provider_version.aar"
+cp "$provider_pom" "$provider_staging_dir/mpv-ffmpeg-android-$provider_version.pom"
 
 pending_root="$repo_dir/OUTPUT/maven.pending"
 rm -rf "$pending_root"
-mkdir -p "$pending_root/io/github/abdallahmehiz/mpv-android-lib"
-cp -R "$staging_dir" "$pending_root/io/github/abdallahmehiz/mpv-android-lib/$version"
+mkdir -p "$pending_root"
+cp -R "$work_dir/maven-stage/." "$pending_root/"
 "$repo_dir/buildscripts/scripts/publish-maven-tree.sh" \
 	"$pending_root" \
 	"$maven_root" \
-	"io/github/abdallahmehiz/mpv-android-lib/$version/mpv-android-lib-$version.aar" \
+	"io/github/abdallahmehiz/mpv-android-lib/$mpv_version/mpv-android-lib-$mpv_version.aar" \
 	"$repo_dir/buildscripts/scripts/validate-dovi-aar.sh"
-echo "Created $maven_dir" || true
+echo "Created $maven_root/io/github/abdallahmehiz/mpv-android-lib/$mpv_version"
+echo "Created $maven_root/io/github/abdallahmehiz/mpv-ffmpeg-android/$provider_version"
