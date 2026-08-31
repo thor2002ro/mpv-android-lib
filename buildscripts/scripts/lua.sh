@@ -35,7 +35,7 @@ library_objects=(
 	ltablib.o lstrlib.o loadlib.o linit.o
 )
 make CC="$CC" AR="$AR rc" RANLIB="$RANLIB" \
-	CFLAGS="-O2 ${mycflags[*]}" \
+	CFLAGS="$CFLAGS ${mycflags[*]}" \
 	CORE_O="${core_objects[*]}" LIB_O="${library_objects[*]}" a -j$cores
 
 lua_install_dir="$prefix_dir/usr/local"
