@@ -140,6 +140,15 @@ for flag in -O3 -flto=thin -mfpu=neon -mthumb; do
 done
 
 android_makefile="$repository_root/lib/src/main/jni/Android.mk"
+mpv_kotlin="$repository_root/lib/src/main/java/is/xyz/mpv/MPV.kt"
+grep -Eq '^LOCAL_MODULE[[:space:]]*:=[[:space:]]*libmpvjni$' "$android_makefile" ||
+    fail "MPV JNI is not packaged as libmpvjni.so"
+grep -Fq 'System.loadLibrary("mpvjni")' "$mpv_kotlin" ||
+    fail "Kotlin does not load the mpvjni native library"
+if grep -Eq 'LOCAL_MODULE[[:space:]]*:=[[:space:]]*libplayer|System\.loadLibrary\("player"\)' \
+    "$android_makefile" "$mpv_kotlin"; then
+    fail "Legacy libplayer MPV JNI naming remains"
+fi
 grep -Eq '^LOCAL_CFLAGS[[:space:]]*:=[[:space:]].*-O3([[:space:]]|$)' "$android_makefile" ||
     fail "MPV JNI compilation does not explicitly select -O3"
 grep -Eq '^LOCAL_CFLAGS[[:space:]]*:=[[:space:]].*-flto=thin([[:space:]]|$)' "$android_makefile" ||

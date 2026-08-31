@@ -65,7 +65,7 @@ include $(PREBUILT_SHARED_LIBRARY)
 
 include $(CLEAR_VARS)
 
-LOCAL_MODULE    := libplayer
+LOCAL_MODULE    := libmpvjni
 LOCAL_CFLAGS    := -Werror -O3 -flto=thin
 LOCAL_CPPFLAGS  += -std=c++11
 ifeq ($(TARGET_ARCH_ABI),armeabi-v7a)

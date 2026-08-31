@@ -443,7 +443,7 @@ class MPV(
     init {
         if (!systemLibraryLoaded) {
             System.loadLibrary("mpv")
-            System.loadLibrary("player")
+            System.loadLibrary("mpvjni")
             systemLibraryLoaded = true
         }
         Utils.prepareConfig(context, configDir, cacheDir)
