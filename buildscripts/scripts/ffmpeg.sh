@@ -22,11 +22,17 @@ cpu=armv7-a
 cpuflags=
 [[ "$ndk_triple" == "arm"* ]] && cpuflags="$cpuflags -mfpu=neon -mcpu=cortex-a8"
 
+architecture_args=()
+[[ "$ndk_triple" == "arm"* || "$ndk_triple" == "aarch64"* ]] && architecture_args+=(--enable-neon)
+[[ "$ndk_triple" == "arm"* ]] && architecture_args+=(--enable-thumb)
+
 args=(
 	--target-os=android --enable-cross-compile
-	--cross-prefix=$ndk_triple- --cc=$CC --pkg-config=pkg-config --pkg-config-flags=--static --nm=llvm-nm
+	--cross-prefix=$ndk_triple- --cc=$CC --host-cc=clang --pkg-config=pkg-config --pkg-config-flags=--static --nm=llvm-nm
 	--arch=${ndk_triple%%-*} --cpu=$cpu
 	--extra-cflags="-I$prefix_dir/include $cpuflags" --extra-ldflags="-L$prefix_dir/lib"
+	--optflags=-O3 --enable-lto
+	"${architecture_args[@]}"
 
 	--enable-{jni,mediacodec,libtls,libdav1d,libxml2} --disable-vulkan
 	--disable-static --enable-shared --enable-{gpl,version3,nonfree}

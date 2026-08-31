@@ -58,7 +58,15 @@ loadarch () {
 	export prefix_dir="$PWD/prefix/$prefix_name"
 	export CC=$cc_triple-clang
 	export CXX=$cc_triple-clang++
-	export LDFLAGS="-Wl,-O1,--icf=safe -Wl,-z,max-page-size=16384"
+	export CC_FOR_BUILD=clang
+	export CXX_FOR_BUILD=clang++
+	local target_optimization_flags="-O3 -flto=thin"
+	if [ "$1" == "armv7l" ]; then
+		target_optimization_flags="$target_optimization_flags -mfpu=neon -mthumb"
+	fi
+	export CFLAGS="$target_optimization_flags"
+	export CXXFLAGS="$target_optimization_flags"
+	export LDFLAGS="-flto=thin -Wl,-O1,--icf=safe -Wl,-z,max-page-size=16384"
 	export AR=llvm-ar
 	export RANLIB=llvm-ranlib
 }
@@ -73,6 +81,11 @@ setup_prefix () {
 
 	local cpu_family=${ndk_triple%%-*}
 	[ "$cpu_family" == "i686" ] && cpu_family=x86
+	local cpu_args=
+	if [ "$cpu_family" == "arm" ]; then
+		cpu_args="c_args = ['-mfpu=neon', '-mthumb']
+cpp_args = ['-mfpu=neon', '-mthumb']"
+	fi
 
 	if ! command -v pkg-config >/dev/null; then
 		echo "pkg-config not provided!"
@@ -83,10 +96,13 @@ setup_prefix () {
 	# also define: release build, static libs and no source downloads at runtime(!!!)
 	cat >"$prefix_dir/crossfile.tmp" <<CROSSFILE
 [built-in options]
-buildtype = 'release'
+debug = false
+optimization = '3'
+b_lto = true
 default_library = 'static'
 wrap_mode = 'nodownload'
 prefix = '/usr/local'
+$cpu_args
 [binaries]
 c = '$CC'
 cpp = '$CXX'
