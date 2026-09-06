@@ -122,4 +122,89 @@ x86 x86
 x86_64 x86_64
 EOF
 
+provider_version=0.5.1-thor.b2fe9d877067
+provider_repository="$test_root/provider-maven"
+provider_version_dir="$provider_repository/io/github/peerless2012/libass-android-provider/$provider_version"
+mkdir -p "$provider_version_dir"
+published_provider_aar="$provider_version_dir/libass-android-provider-$provider_version.aar"
+cp "$valid_provider" "$published_provider_aar"
+cat > "$provider_version_dir/libass-android-provider-$provider_version.pom" <<EOF
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0">
+  <modelVersion>4.0.0</modelVersion>
+  <groupId>io.github.peerless2012</groupId>
+  <artifactId>libass-android-provider</artifactId>
+  <version>$provider_version</version>
+  <packaging>aar</packaging>
+</project>
+EOF
+provider_properties="$test_root/libass-provider.properties"
+cat > "$provider_properties" <<EOF
+group=io.github.peerless2012
+artifact=libass-android-provider
+version=$provider_version
+libass_version=0.17.5
+libass_version_hex=0x01705010
+libass_commit=b2fe9d8770671234567890abcdef1234567890ab
+patch_tree=0123456789abcdef0123456789abcdef01234567
+ndk_version=29.0.14206865
+EOF
+
+ANDROID_HOME="${ANDROID_HOME:-/home/thor2002ro/android-sdk}" \
+	java -classpath "$repository_root/gradle/wrapper/gradle-wrapper.jar" \
+	org.gradle.wrapper.GradleWrapperMain --no-daemon \
+	-PnativeNdkVersion=29.0.14206865 \
+	-PlibassProviderRepository="$provider_repository" \
+	-PlibassProviderProperties="$provider_properties" \
+	:lib:generatePomFileForMavenPublication >/dev/null
+
+ANDROID_HOME="${ANDROID_HOME:-/home/thor2002ro/android-sdk}" \
+	java -classpath "$repository_root/gradle/wrapper/gradle-wrapper.jar" \
+	org.gradle.wrapper.GradleWrapperMain --no-daemon \
+	-PnativeNdkVersion=29.0.14206865 \
+	-PlibassProviderRepository="$provider_repository" \
+	-PlibassProviderProperties="$provider_properties" \
+	:app:dataBindingMergeDependencyArtifactsDebug >/dev/null
+
+mismatched_provider_properties="$test_root/mismatched-libass-provider.properties"
+sed 's/^ndk_version=.*/ndk_version=28.2.13676358/' \
+	"$provider_properties" > "$mismatched_provider_properties"
+if ANDROID_HOME="${ANDROID_HOME:-/home/thor2002ro/android-sdk}" \
+	java -classpath "$repository_root/gradle/wrapper/gradle-wrapper.jar" \
+	org.gradle.wrapper.GradleWrapperMain --no-daemon \
+	-PnativeNdkVersion=29.0.14206865 \
+	-PlibassProviderRepository="$provider_repository" \
+	-PlibassProviderProperties="$mismatched_provider_properties" \
+	:lib:generatePomFileForMavenPublication >"$test_root/mismatched-gradle.log" 2>&1
+then
+	fail "MPV Gradle accepted libass built with a different NDK"
+fi
+grep -Fq 'Shared libass provider NDK 28.2.13676358 does not match MPV NDK 29.0.14206865' \
+	"$test_root/mismatched-gradle.log" || fail "NDK mismatch failure was not actionable"
+mpv_pom="$repository_root/lib/build/publications/maven/pom-default.xml"
+[[ "$(grep -c '<artifactId>libass-android-provider</artifactId>' "$mpv_pom")" -eq 1 ]] || \
+	fail "MPV POM does not contain exactly one shared libass dependency"
+grep -Fq "<version>$provider_version</version>" "$mpv_pom" || \
+	fail "MPV POM does not pin shared libass $provider_version"
+cmp "$valid_provider" "$published_provider_aar" || \
+	fail "published provider differs from the canonical AAR"
+
+grep -Fq 'dep_libass=(freetype2 fontconfig fribidi harfbuzz unibreak)' \
+	"$repository_root/buildscripts/include/depinfo.sh" || fail "source libass dependencies are missing"
+grep -Fq 'dep_mpv=(ffmpeg libass lua libplacebo)' \
+	"$repository_root/buildscripts/include/depinfo.sh" || fail "normal MPV builds do not select source libass"
+grep -Fq '[[ -n "${LIBASS_ANDROID_PROVIDER_AAR:-}" ]]' \
+	"$repository_root/buildscripts/include/depinfo.sh" || fail "shared libass selection is not explicit"
+
+env -u ORG_GRADLE_PROJECT_libassProviderRepository \
+	-u ORG_GRADLE_PROJECT_libassProviderProperties \
+	ANDROID_HOME="${ANDROID_HOME:-/home/thor2002ro/android-sdk}" \
+	java -classpath "$repository_root/gradle/wrapper/gradle-wrapper.jar" \
+	org.gradle.wrapper.GradleWrapperMain --no-daemon \
+	-PnativeNdkVersion=29.0.14206865 \
+	:lib:generatePomFileForMavenPublication >/dev/null
+if grep -Fq '<artifactId>libass-android-provider</artifactId>' "$mpv_pom"; then
+	fail "normal MPV publication unexpectedly depends on the shared libass provider"
+fi
+
 echo "MPV shared libass provider import contracts passed"

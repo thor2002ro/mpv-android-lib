@@ -1,5 +1,6 @@
 import org.jetbrains.kotlin.gradle.dsl.JvmTarget
 import org.jetbrains.kotlin.gradle.tasks.KotlinCompile
+import java.util.Properties
 
 plugins {
     id("com.android.library")
@@ -9,12 +10,39 @@ plugins {
 val abiCodes = mapOf("armeabi-v7a" to 1, "arm64-v8a" to 2, "x86" to 3, "x86_64" to 4)
 val universalBase = 8000
 
+data class LibassProvider(
+    val group: String,
+    val artifact: String,
+    val version: String,
+    val ndkVersion: String,
+)
+
+val libassProviderProperties = providers.gradleProperty("libassProviderProperties").orNull
+val libassProvider = libassProviderProperties?.let { propertiesPath ->
+    val propertiesFile = rootProject.file(propertiesPath)
+    val properties = Properties().apply {
+        require(propertiesFile.isFile) { "Shared libass provider properties not found: $propertiesFile" }
+        propertiesFile.inputStream().use(::load)
+    }
+    LibassProvider(
+        group = requireNotNull(properties.getProperty("group")),
+        artifact = requireNotNull(properties.getProperty("artifact")),
+        version = requireNotNull(properties.getProperty("version")),
+        ndkVersion = requireNotNull(properties.getProperty("ndk_version")),
+    )
+}
+val configuredNativeNdkVersion = providers.gradleProperty("nativeNdkVersion").orNull
+    ?: libassProvider?.ndkVersion
+require(libassProvider == null || configuredNativeNdkVersion == libassProvider.ndkVersion) {
+    "Shared libass provider NDK ${libassProvider?.ndkVersion} does not match MPV NDK $configuredNativeNdkVersion"
+}
+
 version = "0.2.1-thor"
 group = "io.github.abdallahmehiz"
 
 android {
     namespace = "is.xyz.mpv"
-    providers.gradleProperty("nativeNdkVersion").orNull?.let {
+    configuredNativeNdkVersion?.let {
         ndkVersion = it
     }
     compileSdk = 36
@@ -25,6 +53,14 @@ android {
 
     buildFeatures {
         buildConfig = true
+    }
+
+    if (libassProvider != null) {
+        packaging {
+            jniLibs {
+                excludes += "**/libc++_shared.so"
+            }
+        }
     }
 
     compileOptions {
@@ -39,6 +75,9 @@ android {
 
 dependencies {
     api(project(":ffmpeg"))
+    if (libassProvider != null) {
+        api("${libassProvider.group}:${libassProvider.artifact}:${libassProvider.version}")
+    }
     implementation("androidx.appcompat:appcompat:1.8.0")
 }
 
