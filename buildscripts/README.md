@@ -2,7 +2,9 @@
 
 Compiling the native parts is a process separate from Gradle and the app won't work if you skip this.
 
-This process is supported on Linux and macOS. Windows (or WSL) will **not** work.
+The upstream scripts are supported on Linux and macOS. This project also
+supports Windows through WSL2: run `build.bat` from the repository root. The
+wrapper invokes `build.sh`, which stages the build on WSL's ext4 filesystem.
 
 ## Download dependencies
 
