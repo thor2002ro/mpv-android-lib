@@ -98,4 +98,9 @@ player2.create(context)
 
 Take a look at the [README](buildscripts/README.md) inside the `buildscripts` directory.
 
+The shared libass provider AAR and standalone libdovi Android v3 SDK must be
+published before building. `build.sh` validates every ABI's `libmpv.so` imports
+and publishes MPV and FFmpeg artifacts under `OUTPUT/maven`. Generated artifacts
+are committed separately from source changes.
+
 Some other documentation can be found at this [link](http://mpv-android.github.io/mpv-android/).
