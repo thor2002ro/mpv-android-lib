@@ -7,15 +7,32 @@ on:
 jobs:
   linux:
     runs-on: ubuntu-latest
+    env:
+      LIBASS_ANDROID_PROVIDER_AAR: ${{ github.workspace }}/dependencies/libass-android/OUTPUT/lib_ass-release.aar
+      LIBDOVI_ANDROID_SDK: ${{ github.workspace }}/dependencies/libdovi-android/OUTPUT/sdk
+      ORG_GRADLE_PROJECT_libassProviderRepository: ${{ github.workspace }}/dependencies/libass-android/OUTPUT/maven
+      ORG_GRADLE_PROJECT_libassProviderProperties: ${{ github.workspace }}/dependencies/libass-android/OUTPUT/libass-provider.properties
     strategy:
       fail-fast: false
       matrix:
         architecture: [ armv7l, arm64, x86, x86_64 ]
     permissions:
-      contents: write
+      contents: read
 
     steps:
       - uses: actions/checkout@v4
+      - name: Checkout shared libass provider
+        uses: actions/checkout@v4
+        with:
+          repository: thor2002ro/libass-android
+          ref: master
+          path: dependencies/libass-android
+      - name: Checkout Dolby Vision SDK
+        uses: actions/checkout@v4
+        with:
+          repository: thor2002ro/libdovi-android
+          ref: main
+          path: dependencies/libdovi-android
       - uses: actions/setup-java@v4
         with:
           java-version: '17'
@@ -42,4 +59,4 @@ jobs:
       - uses: actions/upload-artifact@v4
         with:
           name: mpv-lib-${{ matrix.architecture }}
-          path: lib/build/outputs/aar/app-release.aar
+          path: lib/build/outputs/aar/lib-release.aar

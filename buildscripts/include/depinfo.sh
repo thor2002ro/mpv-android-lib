@@ -35,5 +35,9 @@ dep_unibreak=()
 dep_libass=(freetype2 fontconfig fribidi harfbuzz unibreak)
 dep_lua=()
 dep_libplacebo=()
-dep_mpv=(ffmpeg libass lua libplacebo)
+if [[ -n "${LIBASS_ANDROID_PROVIDER_AAR:-}" ]]; then
+	dep_mpv=(ffmpeg lua libplacebo)
+else
+	dep_mpv=(ffmpeg libass lua libplacebo)
+fi
 dep_mpv_android=(mpv)
