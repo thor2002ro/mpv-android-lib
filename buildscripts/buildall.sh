@@ -72,12 +72,10 @@ loadarch () {
 }
 
 setup_prefix () {
-	if [ ! -d "$prefix_dir" ]; then
-		mkdir -p "$prefix_dir"
-		# enforce flat structure (/usr/local -> /)
-		ln -s . "$prefix_dir/usr"
-		ln -s . "$prefix_dir/local"
-	fi
+	mkdir -p "$prefix_dir"
+	# enforce flat structure (/usr/local -> /)
+	[ -e "$prefix_dir/usr" ] || [ -L "$prefix_dir/usr" ] || ln -s . "$prefix_dir/usr"
+	[ -e "$prefix_dir/local" ] || [ -L "$prefix_dir/local" ] || ln -s . "$prefix_dir/local"
 
 	local cpu_family=${ndk_triple%%-*}
 	[ "$cpu_family" == "i686" ] && cpu_family=x86
@@ -140,6 +138,9 @@ build () {
 		done
 	fi
 	printf >&2 '\e[1;34m%s\e[m\n' "Building $1..."
+	if [ "$1" == "mpv" ] && [[ -n "${LIBASS_ANDROID_PROVIDER_AAR:-}" ]]; then
+		bash scripts/import-libass-provider.sh
+	fi
 	if [ "$1" == "mpv-android" ]; then
 		pushd ..
 		BUILDSCRIPT=buildscripts/scripts/$1.sh

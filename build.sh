@@ -2,6 +2,21 @@
 set -euo pipefail
 
 repo_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+provider_aar="${LIBASS_ANDROID_PROVIDER_AAR:-$repo_dir/../libass-android/OUTPUT/lib_ass-release.aar}"
+if [[ "$provider_aar" != /* ]]; then
+	provider_aar="$PWD/$provider_aar"
+fi
+requested_provider_aar="$provider_aar"
+if ! provider_dir="$(cd "$(dirname "$provider_aar")" 2>/dev/null && pwd -P)"; then
+	echo "Provider AAR not found: $requested_provider_aar" >&2
+	exit 1
+fi
+provider_aar="$provider_dir/$(basename "$provider_aar")"
+[[ -f "$provider_aar" ]] || {
+	echo "Provider AAR not found: $requested_provider_aar" >&2
+	exit 1
+}
+export LIBASS_ANDROID_PROVIDER_AAR="$provider_aar"
 sdk_root="${LIBDOVI_ANDROID_SDK:-$repo_dir/../libdovi-android/OUTPUT/sdk}"
 if [[ "$sdk_root" != /* ]]; then
 	sdk_root="$PWD/$sdk_root"

@@ -62,8 +62,10 @@ if [ ! -d unibreak ]; then
 		tar -xz -C unibreak --strip-components=1
 fi
 
-# libass
-[ ! -d libass ] && git clone --depth 1 https://github.com/libass/libass
+# libass is built from source unless a shared provider AAR was selected.
+if [[ -z "${LIBASS_ANDROID_PROVIDER_AAR:-}" && ! -d libass ]]; then
+	git clone --depth 1 https://github.com/libass/libass
+fi
 
 # lua
 [ ! -d lua ] && git clone --depth 1 --branch v5-2 https://github.com/lua/lua
