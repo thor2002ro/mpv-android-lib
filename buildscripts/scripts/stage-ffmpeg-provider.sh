@@ -37,6 +37,7 @@ media3_decoders=(
 )
 
 ffmpeg_commit="$(git -C "$ffmpeg_repository" rev-parse HEAD)"
+ffmpeg_patch_sha256="$(git -C "$ffmpeg_repository" diff --binary HEAD | sha256sum | cut -d ' ' -f 1)"
 [[ "$ffmpeg_commit" =~ ^[0-9a-f]{40}$ ]] || {
     echo "Could not resolve the exact FFmpeg commit." >&2
     exit 1
@@ -110,6 +111,7 @@ artifact=mpv-ffmpeg-android
 version=$provider_version
 ffmpeg_version=$ffmpeg_version
 ffmpeg_commit=$ffmpeg_commit
+ffmpeg_patch_sha256=$ffmpeg_patch_sha256
 ndk_version=$ndk_version
 abis=armeabi-v7a,arm64-v8a,x86,x86_64
 optimization=O3,thin-lto,armv7-neon,armv7-thumb,arm64-neon

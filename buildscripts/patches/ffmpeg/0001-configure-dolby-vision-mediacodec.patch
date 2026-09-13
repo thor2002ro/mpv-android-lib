@@ -1,0 +1,85 @@
+diff --git a/libavcodec/mediacodecdec.c b/libavcodec/mediacodecdec.c
+--- a/libavcodec/mediacodecdec.c
++++ b/libavcodec/mediacodecdec.c
+@@ -26,6 +26,7 @@
+ #include <string.h>
+
+ #include "libavutil/avassert.h"
++#include "libavutil/dovi_meta.h"
+ #include "libavutil/common.h"
+ #include "libavutil/mem.h"
+ #include "libavutil/opt.h"
+@@ -305,6 +306,45 @@
+ }
+ #endif
+
++static int mediacodec_set_dovi_format(AVCodecContext *avctx,
++                                      FFAMediaFormat *format,
++                                      const char **mime)
++{
++    const AVPacketSideData *sd = av_packet_side_data_get(
++        avctx->coded_side_data, avctx->nb_coded_side_data, AV_PKT_DATA_DOVI_CONF);
++    const AVDOVIDecoderConfigurationRecord *dv;
++
++    if (!sd)
++        return 0;
++    if (sd->size < sizeof(*dv))
++        return AVERROR_INVALIDDATA;
++    dv = (const AVDOVIDecoderConfigurationRecord *)sd->data;
++    // A source-base presentation with no RPU remains ordinary HEVC.
++    if (!dv->rpu_present_flag)
++        return 0;
++    if (!dv->bl_present_flag || dv->dv_level < 1 || dv->dv_level > 13)
++        return AVERROR_INVALIDDATA;
++    switch (dv->dv_profile) {
++    case 4:
++    case 5:
++    case 7:
++    case 8:
++        break;
++    default:
++        av_log(avctx, AV_LOG_ERROR, "Unsupported HEVC Dolby Vision profile %d\n",
++               dv->dv_profile);
++        return AVERROR(ENOSYS);
++    }
++
++    *mime = "video/dolby-vision";
++    // Android CodecProfileLevel values are bit flags, not bitstream numbers.
++    ff_AMediaFormat_setInt32(format, "profile", 1 << dv->dv_profile);
++    ff_AMediaFormat_setInt32(format, "level", 1 << (dv->dv_level - 1));
++    av_log(avctx, AV_LOG_INFO, "Configuring Dolby Vision profile %d level %d\n",
++           dv->dv_profile, dv->dv_level);
++    return 0;
++}
++
+ static av_cold int mediacodec_decode_init(AVCodecContext *avctx)
+ {
+     int ret;
+@@ -349,6 +389,9 @@
+         codec_mime = "video/hevc";
+
+         ret = hevc_set_extradata(avctx, format);
++        if (ret < 0)
++            goto done;
++        ret = mediacodec_set_dovi_format(avctx, format, &codec_mime);
+         if (ret < 0)
+             goto done;
+         break;
+diff --git a/libavcodec/mediacodecdec_common.c b/libavcodec/mediacodecdec_common.c
+--- a/libavcodec/mediacodecdec_common.c
++++ b/libavcodec/mediacodecdec_common.c
+@@ -770,7 +770,13 @@
+         }
+     }
+
+-    profile = ff_AMediaCodecProfile_getProfileFromAVCodecContext(avctx);
++    if (!strcmp(mime, "video/dolby-vision")) {
++        // The AVCodecContext profile still describes the HEVC base layer.
++        if (!ff_AMediaFormat_getInt32(format, "profile", &profile))
++            return AVERROR_INVALIDDATA;
++    } else {
++        profile = ff_AMediaCodecProfile_getProfileFromAVCodecContext(avctx);
++    }
+     if (profile < 0) {
+         av_log(avctx, AV_LOG_WARNING, "Unsupported or unknown profile\n");
+     }

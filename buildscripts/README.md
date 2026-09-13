@@ -51,6 +51,13 @@ adb logcat -s mpv # get only mpv logs
 
 ## Rebuilding a single component
 
+The FFmpeg download step applies `patches/ffmpeg/*.patch`. The Dolby Vision
+patch configures the Android Dolby Vision MIME type and profile from the
+stream's configuration record; HEVC without an RPU stays on the HEVC path.
+Decoder lookup uses that Dolby Vision profile rather than the HEVC base-layer
+profile. Unsupported Dolby Vision configurations fail instead of silently
+opening an HDR10 decoder.
+
 If you've made changes to a single component (e.g. ffmpeg or mpv) and want a new build you can of course just run ./buildall.sh but it's also possible to just build a single component like this:
 
 ```sh

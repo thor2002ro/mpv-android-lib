@@ -31,6 +31,14 @@ else
     git -C ffmpeg fetch --depth 1 origin "$v_ffmpeg"
     git -C ffmpeg reset --hard FETCH_HEAD
 fi
+for patch_file in "$(realpath ../patches/ffmpeg)"/*.patch; do
+	if git -C ffmpeg apply --check "$patch_file"; then
+		git -C ffmpeg apply "$patch_file"
+	elif ! git -C ffmpeg apply --reverse --check "$patch_file"; then
+		echo >&2 "Unable to apply FFmpeg patch: $patch_file"
+		exit 1
+	fi
+done
 # freetype2
 [ ! -d freetype2 ] && git clone --depth 1 --recurse-submodules https://gitlab.freedesktop.org/freetype/freetype.git freetype2 -b VER-${v_freetype//./-}
 
