@@ -37,7 +37,7 @@ require(libassProvider == null || configuredNativeNdkVersion == libassProvider.n
     "Shared libass provider NDK ${libassProvider?.ndkVersion} does not match MPV NDK $configuredNativeNdkVersion"
 }
 
-version = "0.2.1-thor"
+version = "0.2.2-thor"
 group = "io.github.abdallahmehiz"
 
 android {

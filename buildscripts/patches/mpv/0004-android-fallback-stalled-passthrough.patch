@@ -1,0 +1,324 @@
+diff --git a/audio/out/ao.c b/audio/out/ao.c
+index 4e5e9e3df7942f3a2a1385446db9fa514862a344..88246f04f4c212078c387aa57d65ca1c24703280 100644
+--- a/audio/out/ao.c
++++ b/audio/out/ao.c
+@@ -384,6 +384,11 @@ void ao_request_reload(struct ao *ao)
+     ao_add_events(ao, AO_EVENT_RELOAD);
+ }
+
++void ao_request_passthrough_fallback(struct ao *ao)
++{
++    ao_add_events(ao, AO_EVENT_PASSTHROUGH_FAILED);
++}
++
+ // Notify the player that the device list changed. Fully thread-safe.
+ void ao_hotplug_event(struct ao *ao)
+ {
+diff --git a/audio/out/ao.h b/audio/out/ao.h
+index ce044fdc473a7090da019036f8ec219a6f77e63b..3008eafb747ac9af34b7a93d8e07d0bbde9f4c79 100644
+--- a/audio/out/ao.h
++++ b/audio/out/ao.h
+@@ -43,6 +43,7 @@ enum aocontrol {
+ enum {
+     AO_EVENT_RELOAD = 1,
+     AO_EVENT_HOTPLUG = 2,
++    AO_EVENT_PASSTHROUGH_FAILED = 4,
+ };
+
+ enum {
+@@ -105,6 +106,7 @@ struct mp_async_queue;
+ struct mp_async_queue *ao_get_queue(struct ao *ao);
+ int ao_query_and_reset_events(struct ao *ao, int events);
+ void ao_request_reload(struct ao *ao);
++void ao_request_passthrough_fallback(struct ao *ao);
+ void ao_hotplug_event(struct ao *ao);
+
+ struct ao_hotplug;
+diff --git a/audio/out/ao_audiotrack.c b/audio/out/ao_audiotrack.c
+index f483ccc8e8d8b70f4daf9f1e2c26aa54b80e3fd5..42f63c342b7513ee9d22600cf01947291846192a 100644
+--- a/audio/out/ao_audiotrack.c
++++ b/audio/out/ao_audiotrack.c
+@@ -23,6 +23,7 @@
+
+ #include "ao.h"
+ #include "internal.h"
++#include "ao_audiotrack_passthrough.h"
+ #include "common/msg.h"
+ #include "audio/format.h"
+ #include "options/m_option.h"
+@@ -52,6 +53,8 @@ struct priv {
+
+     void *chunk;
+     int chunksize;
++    int pending_offset;
++    int pending_size;
+     jbyteArray bytearray;
+     jshortArray shortarray;
+     jfloatArray floatarray;
+@@ -62,6 +65,7 @@ struct priv {
+
+     bool thread_terminate;
+     bool thread_created;
++    struct mp_audiotrack_passthrough_watchdog passthrough_watchdog;
+     mp_thread thread;
+     mp_mutex lock;
+     mp_cond wakeup;
+@@ -486,19 +490,21 @@ static double AudioTrack_getLatency(struct ao *ao)
+     return MPCLAMP(delay, 0.0, 2.0);
+ }
+
+-static int AudioTrack_write(struct ao *ao, int len)
++static int AudioTrack_write(struct ao *ao, int offset, int len)
+ {
+     struct priv *p = ao->priv;
+     if (!p->audiotrack)
+         return -1;
+     JNIEnv *env = MP_JNI_GET_ENV(ao);
+-    void *buf = p->chunk;
++    void *buf = (char *)p->chunk + offset;
+
+     jint ret;
+     if (p->format == AudioFormat.ENCODING_IEC61937) {
+-        (*env)->SetShortArrayRegion(env, p->shortarray, 0, len / 2, buf);
++        (*env)->SetShortArrayRegion(env, p->shortarray, offset / 2, len / 2, buf);
+         if (MP_JNI_EXCEPTION_LOG(ao) < 0) return -1;
+-        ret = MP_JNI_CALL_INT(p->audiotrack, AudioTrack.writeShortV23, p->shortarray, 0, len / 2, AudioTrack.WRITE_BLOCKING);
++        ret = MP_JNI_CALL_INT(p->audiotrack, AudioTrack.writeShortV23,
++                              p->shortarray, offset / 2, len / 2,
++                              AudioTrack.WRITE_NON_BLOCKING);
+         if (MP_JNI_EXCEPTION_LOG(ao) < 0) return -1;
+         if (ret > 0) ret *= 2;
+
+@@ -583,10 +589,62 @@ static MP_THREAD_VOID ao_thread(void *arg)
+             int64_t ts = mp_time_ns();
+             ts += MP_TIME_S_TO_NS(read_samples / (double)(ao->samplerate));
+             ts += MP_TIME_S_TO_NS(AudioTrack_getLatency(ao));
+-            int samples = ao_read_data(ao, &p->chunk, read_samples, ts, NULL, false, false);
+-            int ret = AudioTrack_write(ao, samples * ao->sstride);
++            bool passthrough = p->format == AudioFormat.ENCODING_IEC61937;
++            int offset = 0;
++            int requested;
++            if (passthrough) {
++                if (p->pending_size == 0) {
++                    int samples = ao_read_data(ao, &p->chunk, read_samples, ts,
++                                               NULL, false, false);
++                    p->pending_offset = 0;
++                    p->pending_size = samples * ao->sstride;
++                }
++                offset = p->pending_offset;
++                requested = p->pending_size;
++            } else {
++                int samples = ao_read_data(ao, &p->chunk, read_samples, ts,
++                                           NULL, false, false);
++                requested = samples * ao->sstride;
++            }
++
++            int ret = requested > 0
++                ? AudioTrack_write(ao, offset, requested)
++                : 0;
+             if (ret >= 0) {
+                 p->written_frames += ret / ao->sstride;
++                if (passthrough && ret > 0) {
++                    p->pending_offset += ret;
++                    p->pending_size -= ret;
++                }
++
++                if (passthrough) {
++                    int result = p->passthrough_watchdog.result;
++                    if (result == MP_AUDIOTRACK_PASSTHROUGH_PENDING) {
++                        uint32_t playhead = 0;
++                        if (mp_audiotrack_passthrough_watchdog_needs_probe(
++                                &p->passthrough_watchdog, requested))
++                            playhead = AudioTrack_getPlaybackHeadPosition(ao);
++                        result = mp_audiotrack_passthrough_watchdog_update(
++                            &p->passthrough_watchdog, true, requested, ret,
++                            playhead, mp_time_ns());
++                    }
++                    if (result == MP_AUDIOTRACK_PASSTHROUGH_FAILED) {
++                        MP_WARN(ao, "Passthrough output made no progress; falling back to PCM.\n");
++                        ao_request_passthrough_fallback(ao);
++                        mp_cond_timedwait(&p->wakeup, &p->lock,
++                                          MP_TIME_MS_TO_NS(300));
++                    } else if (ret == 0 || p->pending_size > 0) {
++                        mp_cond_timedwait(&p->wakeup, &p->lock,
++                                          MP_TIME_MS_TO_NS(10));
++                    }
++                }
++            } else if (mp_audiotrack_passthrough_write_needs_fallback(
++                           passthrough, ret)) {
++                MP_ERR(ao, "Passthrough AudioTrack.write failed with %d; falling back to PCM.\n",
++                       ret);
++                ao_request_passthrough_fallback(ao);
++                mp_cond_timedwait(&p->wakeup, &p->lock,
++                                  MP_TIME_MS_TO_NS(300));
+             } else if (ret == AudioManager.ERROR_DEAD_OBJECT) {
+                 MP_WARN(ao, "AudioTrack.write failed with ERROR_DEAD_OBJECT. Recreating AudioTrack...\n");
+                 if (AudioTrack_Recreate(ao) < 0) {
+@@ -817,6 +875,10 @@ static void stop(struct ao *ao)
+     p->written_frames = 0;
+     p->timestamp_fetched = 0;
+     p->timestamp_set = false;
++    p->pending_offset = 0;
++    p->pending_size = 0;
++    p->passthrough_watchdog =
++        (struct mp_audiotrack_passthrough_watchdog){0};
+ }
+
+ static void start(struct ao *ao)
+diff --git a/audio/out/ao_audiotrack_passthrough.h b/audio/out/ao_audiotrack_passthrough.h
+new file mode 100644
+index 0000000000000000000000000000000000000000..d9e824e5e20c953d82696c0baad611a202606a02
+--- /dev/null
++++ b/audio/out/ao_audiotrack_passthrough.h
+@@ -0,0 +1,69 @@
++#ifndef MP_AUDIOTRACK_PASSTHROUGH_H_
++#define MP_AUDIOTRACK_PASSTHROUGH_H_
++
++#include <stdbool.h>
++#include <stdint.h>
++
++#define MP_AUDIOTRACK_PASSTHROUGH_TIMEOUT_NS 2000000000LL
++
++enum mp_audiotrack_passthrough_result {
++    MP_AUDIOTRACK_PASSTHROUGH_PENDING,
++    MP_AUDIOTRACK_PASSTHROUGH_CONFIRMED,
++    MP_AUDIOTRACK_PASSTHROUGH_FAILED,
++};
++
++struct mp_audiotrack_passthrough_watchdog {
++    int64_t last_active_at;
++    int64_t active_elapsed;
++    bool active;
++    bool accepted_data;
++    enum mp_audiotrack_passthrough_result result;
++};
++
++static inline bool mp_audiotrack_passthrough_watchdog_needs_probe(
++    const struct mp_audiotrack_passthrough_watchdog *watchdog,
++    int requested_bytes)
++{
++    return requested_bytes > 0 &&
++           watchdog->result == MP_AUDIOTRACK_PASSTHROUGH_PENDING;
++}
++
++static inline bool mp_audiotrack_passthrough_write_needs_fallback(
++    bool passthrough, int written_bytes)
++{
++    return passthrough && written_bytes < 0;
++}
++
++static inline enum mp_audiotrack_passthrough_result
++mp_audiotrack_passthrough_watchdog_update(
++    struct mp_audiotrack_passthrough_watchdog *watchdog,
++    bool passthrough, int requested_bytes, int written_bytes,
++    uint32_t playhead, int64_t now)
++{
++    if (!passthrough || watchdog->result != MP_AUDIOTRACK_PASSTHROUGH_PENDING)
++        return watchdog->result;
++
++    if (requested_bytes <= 0) {
++        watchdog->active = false;
++        return watchdog->result;
++    }
++
++    if (watchdog->active)
++        watchdog->active_elapsed += now - watchdog->last_active_at;
++    watchdog->active = true;
++    watchdog->last_active_at = now;
++
++    if (written_bytes > 0)
++        watchdog->accepted_data = true;
++
++    if (watchdog->accepted_data && playhead > 0) {
++        watchdog->result = MP_AUDIOTRACK_PASSTHROUGH_CONFIRMED;
++    } else if (watchdog->active_elapsed >=
++               MP_AUDIOTRACK_PASSTHROUGH_TIMEOUT_NS) {
++        watchdog->result = MP_AUDIOTRACK_PASSTHROUGH_FAILED;
++    }
++
++    return watchdog->result;
++}
++
++#endif
+diff --git a/player/audio.c b/player/audio.c
+index 7dc19158c93403650d4645e6e6d4d5542cf39900..c80e19ab201f20316c9446206cd0c0f02f46ab4d 100644
+--- a/player/audio.c
++++ b/player/audio.c
+@@ -335,6 +335,26 @@ done:
+     return res;
+ }
+
++static bool fallback_to_pcm(struct MPContext *mpctx)
++{
++    struct ao_chain *ao_c = mpctx->ao_chain;
++    if (!ao_c || !ao_c->spdif_passthrough || !ao_c->track ||
++        !ao_c->track->dec)
++        return false;
++
++    MP_VERBOSE(mpctx, "Falling back to PCM output.\n");
++    ao_c->spdif_passthrough = false;
++    ao_c->spdif_failed = true;
++    mp_decoder_wrapper_set_spdif_flag(ao_c->track->dec, false);
++    if (!mp_decoder_wrapper_reinit(ao_c->track->dec))
++        return false;
++
++    reset_audio_state(mpctx);
++    mp_output_chain_reset_harder(ao_c->filter);
++    mp_wakeup_core(mpctx);
++    return true;
++}
++
+ static void ao_chain_set_ao(struct ao_chain *ao_c, struct ao *ao)
+ {
+     if (ao_c->ao != ao) {
+@@ -466,18 +486,8 @@ static int reinit_audio_filters_and_output(struct MPContext *mpctx)
+
+     if (!mpctx->ao) {
+         // If spdif was used, try to fallback to PCM.
+-        if (spdif_fallback && ao_c->track && ao_c->track->dec) {
+-            MP_VERBOSE(mpctx, "Falling back to PCM output.\n");
+-            ao_c->spdif_passthrough = false;
+-            ao_c->spdif_failed = true;
+-            mp_decoder_wrapper_set_spdif_flag(ao_c->track->dec, false);
+-            if (!mp_decoder_wrapper_reinit(ao_c->track->dec))
+-                goto init_error;
+-            reset_audio_state(mpctx);
+-            mp_output_chain_reset_harder(ao_c->filter);
+-            mp_wakeup_core(mpctx); // reinit with new format next time
++        if (spdif_fallback && fallback_to_pcm(mpctx))
+             return 0;
+-        }
+
+         MP_ERR(mpctx, "Could not open/initialize audio device -> no sound.\n");
+         mpctx->error_playing = MPV_ERROR_AO_INIT_FAILED;
+@@ -797,6 +807,20 @@ void reload_audio_output(struct MPContext *mpctx)
+     mp_wakeup_core(mpctx);
+ }
+
++static void fallback_audio_output(struct MPContext *mpctx)
++{
++    if (!mpctx->ao)
++        return;
++
++    ao_reset(mpctx->ao);
++    uninit_audio_out(mpctx);
++    if (!fallback_to_pcm(mpctx)) {
++        MP_ERR(mpctx, "Could not fall back from passthrough to PCM output.\n");
++        struct ao_chain *ao_c = mpctx->ao_chain;
++        error_on_track(mpctx, ao_c ? ao_c->track : NULL);
++    }
++}
++
+ // Returns audio start pts for seeking or video sync.
+ // Returns false if PTS is not known yet.
+ static bool get_sync_pts(struct MPContext *mpctx, double *pts)
+@@ -870,5 +894,9 @@ void fill_audio_out_buffers(struct MPContext *mpctx)
+ {
+     struct MPOpts *opts = mpctx->opts;
+
++    if (mpctx->ao && ao_query_and_reset_events(
++            mpctx->ao, AO_EVENT_PASSTHROUGH_FAILED))
++        fallback_audio_output(mpctx);
++
+     if (mpctx->ao && ao_query_and_reset_events(mpctx->ao, AO_EVENT_RELOAD))
+         reload_audio_output(mpctx);
