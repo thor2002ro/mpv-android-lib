@@ -1,16 +1,16 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
 # Credit goes to jmir1
+ndk_suffix="${1:-}"
 # get versions from source code
-MPV_VERSION=$(cat buildscripts/deps/mpv/_build$1/common/version.h | grep "#define VERSION" | cut -d '"' -f 2)
-LIBPLACEBO_VERSION=$(cat buildscripts/deps/libplacebo/_build$1/src/version.h | grep "#define BUILD_VERSION" | cut -d '"' -f 2)
+MPV_VERSION=$(cat "buildscripts/deps/mpv/_build${ndk_suffix}/common/version.h" | grep "#define VERSION" | cut -d '"' -f 2)
+LIBPLACEBO_VERSION=$(cat "buildscripts/deps/libplacebo/_build${ndk_suffix}/src/version.h" | grep "#define BUILD_VERSION" | cut -d '"' -f 2)
 FFMPEG_VERSION=$(echo $(cd buildscripts/deps/ffmpeg/ && git rev-parse --short HEAD))
-# get build date from compiled object file
-START_RODATA=0x$(readelf buildscripts/deps/mpv/_build$1/libmpv.so.p/common_version.c.o -S | grep .rodata | cut -d ' ' -f 27)
-START=0x$(readelf buildscripts/deps/mpv/_build$1/libmpv.so.p/common_version.c.o -s | grep mpv_builddate | cut -d ' ' -f 7)
-SIZE=$(readelf buildscripts/deps/mpv/_build$1/libmpv.so.p/common_version.c.o -s | grep mpv_builddate | cut -d ' ' -f 11)
-SKIP=$(($START_RODATA + $START - 1))
-dd if=buildscripts/deps/mpv/_build$1/libmpv.so.p/common_version.c.o of=date.txt bs=1 skip=$SKIP count=$SIZE
-DATE=$(cat date.txt)
-rm date.txt
+# Read the compiler date from the final library. With LTO enabled the
+# intermediate version object does not reliably expose its string data.
+DATE=$(buildscripts/scripts/extract-build-date.sh "buildscripts/deps/mpv/_build${ndk_suffix}/libmpv.so")
+[[ -n "$DATE" ]]
 # write versions to Utils.kt
 sed -i "s/%MPV_VERSION%/$MPV_VERSION/g" lib/src/main/java/is/xyz/mpv/Utils.kt
 sed -i "s/%LIBPLACEBO_VERSION%/$LIBPLACEBO_VERSION/g" lib/src/main/java/is/xyz/mpv/Utils.kt

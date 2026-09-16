@@ -113,6 +113,14 @@ mapfile -t ffmpeg_provider_aars < <(find "$work_dir/ffmpeg/build/outputs/aar" -m
 }
 mpv_aar="${mpv_aars[0]}"
 ffmpeg_provider_aar="${ffmpeg_provider_aars[0]}"
+metadata_classes="$work_dir/mpv-metadata-classes.jar"
+unzip -p "$mpv_aar" classes.jar > "$metadata_classes"
+metadata_strings=$(unzip -p "$metadata_classes" is/xyz/mpv/Utils.class | strings)
+expected_build_date="$("$work_dir/buildscripts/scripts/extract-build-date.sh" "$work_dir/buildscripts/deps/mpv/_build/libmpv.so")"
+if ! grep -Fxq "$expected_build_date" <<<"$metadata_strings"; then
+	echo "MPV AAR build date does not match the compiled library." >&2
+	exit 1
+fi
 if unzip -Z1 "$mpv_aar" | grep -Eq '^jni/[^/]+/libc\+\+_shared\.so$'; then
 	echo "MPV AAR must use libc++_shared.so from the shared libass provider." >&2
 	exit 1
