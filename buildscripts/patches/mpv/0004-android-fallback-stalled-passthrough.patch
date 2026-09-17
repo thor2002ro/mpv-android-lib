@@ -244,7 +244,7 @@ diff --git a/player/audio.c b/player/audio.c
 index 7dc19158c93403650d4645e6e6d4d5542cf39900..c80e19ab201f20316c9446206cd0c0f02f46ab4d 100644
 --- a/player/audio.c
 +++ b/player/audio.c
-@@ -335,6 +335,26 @@ done:
+@@ -335,6 +335,30 @@ done:
      return res;
  }
 
@@ -261,6 +261,10 @@ index 7dc19158c93403650d4645e6e6d4d5542cf39900..c80e19ab201f20316c9446206cd0c0f0
 +    mp_decoder_wrapper_set_spdif_flag(ao_c->track->dec, false);
 +    if (!mp_decoder_wrapper_reinit(ao_c->track->dec))
 +        return false;
++    // Once the encoded decoder is gone, discard its queued output and reset
++    // the public decoder pins. Reinitializing only the inner decoder leaves
++    // the threaded output queue and pending requests in the old format.
++    mp_filter_reset(ao_c->track->dec->f);
 +
 +    reset_audio_state(mpctx);
 +    mp_output_chain_reset_harder(ao_c->filter);
@@ -271,7 +275,7 @@ index 7dc19158c93403650d4645e6e6d4d5542cf39900..c80e19ab201f20316c9446206cd0c0f0
  static void ao_chain_set_ao(struct ao_chain *ao_c, struct ao *ao)
  {
      if (ao_c->ao != ao) {
-@@ -466,18 +486,8 @@ static int reinit_audio_filters_and_output(struct MPContext *mpctx)
+@@ -466,18 +490,8 @@ static int reinit_audio_filters_and_output(struct MPContext *mpctx)
 
      if (!mpctx->ao) {
          // If spdif was used, try to fallback to PCM.
@@ -291,7 +295,7 @@ index 7dc19158c93403650d4645e6e6d4d5542cf39900..c80e19ab201f20316c9446206cd0c0f0
 
          MP_ERR(mpctx, "Could not open/initialize audio device -> no sound.\n");
          mpctx->error_playing = MPV_ERROR_AO_INIT_FAILED;
-@@ -797,6 +807,20 @@ void reload_audio_output(struct MPContext *mpctx)
+@@ -797,6 +811,20 @@ void reload_audio_output(struct MPContext *mpctx)
      mp_wakeup_core(mpctx);
  }
 
@@ -312,7 +316,7 @@ index 7dc19158c93403650d4645e6e6d4d5542cf39900..c80e19ab201f20316c9446206cd0c0f0
  // Returns audio start pts for seeking or video sync.
  // Returns false if PTS is not known yet.
  static bool get_sync_pts(struct MPContext *mpctx, double *pts)
-@@ -870,5 +894,9 @@ void fill_audio_out_buffers(struct MPContext *mpctx)
+@@ -870,5 +898,9 @@ void fill_audio_out_buffers(struct MPContext *mpctx)
  {
      struct MPOpts *opts = mpctx->opts;
 
