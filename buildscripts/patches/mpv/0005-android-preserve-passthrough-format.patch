@@ -1,0 +1,28 @@
+diff --git a/audio/out/ao_audiotrack.c b/audio/out/ao_audiotrack.c
+--- a/audio/out/ao_audiotrack.c
++++ b/audio/out/ao_audiotrack.c
+@@ -677,6 +677,9 @@ static int init(struct ao *ao)
+-    if (AudioTrack.getNativeOutputSampleRate) {
++    // Encoded carrier rates are not PCM rates and cannot be resampled.
++    // Let AudioTrack reject an unsupported carrier instead of changing it.
++    if (AudioTrack.getNativeOutputSampleRate &&
++        p->format != AudioFormat.ENCODING_IEC61937) {
+         jint samplerate = MP_JNI_CALL_STATIC_INT(
+             AudioTrack.clazz,
+             AudioTrack.getNativeOutputSampleRate,
+             AudioManager.STREAM_MUSIC
+         );
+@@ -713,6 +716,12 @@ static int init(struct ao *ao)
+     if (p->format == AudioFormat.ENCODING_IEC61937) {
+-        p->channel_config = AudioFormat.CHANNEL_OUT_STEREO;
++        // Preserve the carrier layout, not the source's decoded speaker layout.
++        // DTS-HD and TrueHD use an eight-channel IEC61937 carrier.
++        if (ao->channels.num != 2 && ao->channels.num != 8)
++            goto error;
++        p->channel_config = layout_map[ao->channels.num];
++        if (!p->channel_config)
++            goto error;
+     } else {
+         struct mp_chmap_sel sel = {0};
+         for (int i = 0; i < MP_ARRAY_SIZE(layouts); i++) {
+             if (layout_map[i])
