@@ -44,4 +44,9 @@ source_line_count="$(git apply --numstat "$patch_file" |
 [[ "$source_line_count" == 339 ]] ||
     fail "Dolby Vision conversion patch has inconsistent source hunk metadata"
 
+if [[ $# -gt 0 ]]; then
+    git -C "$1" apply --check "$patch_file" ||
+        fail "Dolby Vision conversion patch does not apply to $1"
+fi
+
 echo "MPV Dolby Vision patch contracts passed"

@@ -2,9 +2,10 @@ diff --git a/demux/demux_lavf.c b/demux/demux_lavf.c
 index 4d91983e1..f17696fb2 100644
 --- a/demux/demux_lavf.c
 +++ b/demux/demux_lavf.c
-@@ -38,6 +38,8 @@
+@@ -38,7 +38,9 @@
  #include <libavutil/pixdesc.h>
  #include <libavutil/replaygain.h>
+ #include <libavutil/stereo3d.h>
 
 +#include <dovi.h>
 +
