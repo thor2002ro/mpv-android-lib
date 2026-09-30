@@ -38,13 +38,13 @@
     <dependency>
       <groupId>io.github.abdallahmehiz</groupId>
       <artifactId>mpv-ffmpeg-android</artifactId>
-      <version>8.1.2-thor.c573a95381b0</version>
+      <version>8.1.3-thor.29e619e767cd</version>
       <scope>compile</scope>
     </dependency>
     <dependency>
       <groupId>io.github.peerless2012</groupId>
       <artifactId>libass-android-provider</artifactId>
-      <version>0.5.1-thor.b2fe9d877067</version>
+      <version>0.5.1-thor.f61db567e659</version>
       <scope>compile</scope>
     </dependency>
     <dependency>
