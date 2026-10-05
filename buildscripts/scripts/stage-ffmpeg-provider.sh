@@ -86,6 +86,10 @@ while read -r prefix_name android_abi build_suffix; do
             exit 1
         }
     done
+    grep -Eq '^#define[[:space:]]+CONFIG_AC3_ENCODER[[:space:]]+1$' "$config_components" || {
+        echo "Missing required FFmpeg AC3 encoder for $android_abi" >&2
+        exit 1
+    }
 
     for library in "${ffmpeg_libraries[@]}"; do
         source_library="$wrapper_abi/$library"
@@ -116,6 +120,7 @@ ndk_version=$ndk_version
 abis=armeabi-v7a,arm64-v8a,x86,x86_64
 optimization=O3,thin-lto,armv7-neon,armv7-thumb,arm64-neon
 decoders=$decoders_csv
+encoders=ac3
 EOF
 
 cat > "$provider_main/ffmpeg-provider.properties" <<EOF

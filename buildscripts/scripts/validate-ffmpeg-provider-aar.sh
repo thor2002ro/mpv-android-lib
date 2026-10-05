@@ -77,6 +77,11 @@ if grep -Eq '^headers/|^prefab/modules/[^/]+/libs/android\.(armeabi-v7a|arm64-v8
 fi
 
 decoder_manifest="$(sed -n 's/^decoders=//p' <<<"$metadata")"
+encoder_manifest="$(sed -n 's/^encoders=//p' <<<"$metadata")"
+case ",$encoder_manifest," in
+    *",ac3,"*) ;;
+    *) echo "Provider encoder manifest is missing: ac3" >&2; exit 1 ;;
+esac
 for decoder in \
     aac mp3 mp1 mp2 ac3 eac3 truehd dca vorbis opus \
     amrnb amrwb flac alac pcm_mulaw pcm_alaw gsm_ms \

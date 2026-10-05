@@ -42,8 +42,8 @@ args=(
 	# to keep the build lean we disable some feature quite aggressively:
 	# - devices: no practical use on Android
 	--disable-{encoders,devices}
-	# useful to taking screenshots
-	--enable-encoder=mjpeg,png
+	# Screenshots and on-device Dolby Digital surround conversion.
+	--enable-encoder=mjpeg,png,ac3
 )
 ../configure "${args[@]}"
 

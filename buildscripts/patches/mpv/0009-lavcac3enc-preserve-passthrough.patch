@@ -1,0 +1,80 @@
+diff --git a/audio/filter/af_lavcac3enc.c b/audio/filter/af_lavcac3enc.c
+index 189721870..e44001cf9 100644
+--- a/audio/filter/af_lavcac3enc.c
++++ b/audio/filter/af_lavcac3enc.c
+@@ -410,6 +410,68 @@ error:
+     return NULL;
+ }
+ 
++// Inspect the source frame before the encoder's PCM converter. Encoded carrier
++// frames cannot be resampled, and stereo must keep its original format/rate.
++struct ac3_auto_priv {
++    struct mp_subfilter sub;
++    struct f_opts *opts;
++};
++
++static void ac3_auto_process(struct mp_filter *f)
++{
++    struct ac3_auto_priv *p = f->priv;
++    if (!mp_subfilter_read(&p->sub))
++        return;
++
++    if (p->sub.frame.type == MP_FRAME_AUDIO) {
++        struct mp_aframe *frame = p->sub.frame.data;
++        bool encode = af_fmt_is_pcm(mp_aframe_get_format(frame)) &&
++                      mp_aframe_get_channels(frame) >= p->opts->min_channel_num;
++        if (encode != !!p->sub.filter) {
++            if (!mp_subfilter_drain_destroy(&p->sub))
++                return;
++            if (encode) {
++                // The outer filter owns the strings for the inner filter's lifetime.
++                struct f_opts *opts = talloc_memdup(NULL, p->opts, sizeof(*opts));
++                p->sub.filter = af_lavcac3enc_create(f, opts);
++                if (!p->sub.filter) {
++                    mp_filter_internal_mark_failed(f);
++                    return;
++                }
++            }
++        }
++    }
++    mp_subfilter_continue(&p->sub);
++}
++
++static void ac3_auto_reset(struct mp_filter *f)
++{
++    struct ac3_auto_priv *p = f->priv;
++    mp_subfilter_reset(&p->sub);
++}
++
++static const struct mp_filter_info ac3_auto_filter = {
++    .name = "lavcac3enc-auto",
++    .priv_size = sizeof(struct ac3_auto_priv),
++    .process = ac3_auto_process,
++    .reset = ac3_auto_reset,
++    .destroy = ac3_auto_reset,
++};
++
++static struct mp_filter *ac3_auto_create(struct mp_filter *parent, void *options)
++{
++    struct mp_filter *f = mp_filter_create(parent, &ac3_auto_filter);
++    if (!f) {
++        talloc_free(options);
++        return NULL;
++    }
++    struct ac3_auto_priv *p = f->priv;
++    p->opts = talloc_steal(f, options);
++    p->sub.in = mp_filter_add_pin(f, MP_PIN_IN, "in");
++    p->sub.out = mp_filter_add_pin(f, MP_PIN_OUT, "out");
++    return f;
++}
++
+ #define OPT_BASE_STRUCT struct f_opts
+ 
+ const struct mp_user_filter_entry af_lavcac3enc = {
+@@ -433,5 +495,5 @@ const struct mp_user_filter_entry af_lavcac3enc = {
+             {0}
+         },
+     },
+-    .create = af_lavcac3enc_create,
++    .create = ac3_auto_create,
+ };
