@@ -1,0 +1,15 @@
+Source: https://github.com/mpv-player/mpv/pull/18118
+
+diff --git a/video/out/vo.c b/video/out/vo.c
+index c75edbd6e56b4..bc70d92b2a5de 100644
+--- a/video/out/vo.c
++++ b/video/out/vo.c
+@@ -1228,7 +1228,7 @@ void vo_set_paused(struct vo *vo, bool paused)
+     mp_mutex_lock(&in->lock);
+     if (in->paused != paused) {
+         in->paused = paused;
+-        if (in->paused && in->dropped_frame) {
++        if (in->paused) {
+             in->request_redraw = true;
+             wakeup_core(vo);
+         }
