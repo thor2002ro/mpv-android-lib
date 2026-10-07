@@ -1,0 +1,73 @@
+Source: https://github.com/mpv-player/mpv/pull/18352
+Adapted to upstream upload_overlay_tex() helper.
+
+diff --git a/video/out/vo_gpu_next.c b/video/out/vo_gpu_next.c
+index bd3d1aa..651dfac 100644
+--- a/video/out/vo_gpu_next.c
++++ b/video/out/vo_gpu_next.c
+@@ -67,6 +67,7 @@ struct osd_entry {
+     pl_tex tex;
+     struct pl_overlay_part *parts;
+     int num_parts;
++    int change_id;
+ };
+ 
+ struct osd_state {
+@@ -326,19 +327,31 @@ static bool upload_overlay_tex(struct vo *vo, struct osd_entry *entry,
+                                const struct sub_bitmaps *item)
+ {
+     struct priv *p = vo->priv;
+-    if (!entry->tex)
++    if (!entry->tex) {
+         MP_TARRAY_POP(p->sub_tex, p->num_sub_tex, &entry->tex);
+-    bool ok = pl_tex_recreate(p->gpu, &entry->tex, &(struct pl_tex_params) {
+-        .format = p->osd_fmt[item->format],
+-        .w = MPMAX(item->packed_w, entry->tex ? entry->tex->params.w : 0),
+-        .h = MPMAX(item->packed_h, entry->tex ? entry->tex->params.h : 0),
+-        .host_writable = true,
+-        .sampleable = true,
+-    });
+-    if (!ok) {
+-        MP_ERR(vo, "Failed recreating OSD texture!\n");
+-        return false;
++        entry->change_id = 0; // pooled texture holds another entry's data
+     }
++    // Recreating even an unchanged texture invalidates its cached contents.
++    pl_tex tex = entry->tex;
++    if (!tex || tex->params.w < item->packed_w ||
++        tex->params.h < item->packed_h ||
++        tex->params.format != p->osd_fmt[item->format])
++    {
++        entry->change_id = 0;
++        bool ok = pl_tex_recreate(p->gpu, &entry->tex, &(struct pl_tex_params) {
++            .format = p->osd_fmt[item->format],
++            .w = MPMAX(item->packed_w, tex ? tex->params.w : 0),
++            .h = MPMAX(item->packed_h, tex ? tex->params.h : 0),
++            .host_writable = true,
++            .sampleable = true,
++        });
++        if (!ok) {
++            MP_ERR(vo, "Failed recreating OSD texture!\n");
++            return false;
++        }
++    }
++    if (entry->change_id == item->change_id)
++        return true;
+     struct pl_tex_transfer_params upload_params = {
+         .tex        = entry->tex,
+         .rc         = { .x1 = item->packed_w, .y1 = item->packed_h, },
+@@ -350,11 +363,14 @@ static bool upload_overlay_tex(struct vo *vo, struct osd_entry *entry,
+         upload_params.callback = talloc_free;
+         upload_params.priv = mp_image_new_ref(item->packed);
+     }
++    // A failed upload can leave the texture partially written.
++    entry->change_id = 0;
+     if (!pl_tex_upload(p->gpu, &upload_params)) {
+         MP_ERR(vo, "Failed uploading OSD texture!\n");
+         talloc_free(upload_params.priv);
+         return false;
+     }
++    entry->change_id = item->change_id;
+     return true;
+ }
+ 
