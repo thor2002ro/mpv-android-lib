@@ -1,0 +1,11 @@
+diff --git a/configure b/configure
+--- a/configure
++++ b/configure
+@@ -3076,5 +3076,5 @@
+ ac3_decoder_select="ac3_parser ac3dsp bswapdsp"
+ ac3_fixed_decoder_select="ac3_parser ac3dsp bswapdsp"
+-ac3_encoder_select="ac3dsp audiodsp me_cmp"
+-ac3_fixed_encoder_select="ac3dsp audiodsp me_cmp"
++ac3_encoder_select="ac3dsp audio_frame_queue audiodsp me_cmp"
++ac3_fixed_encoder_select="ac3dsp audio_frame_queue audiodsp me_cmp"
+ acelp_kelvin_decoder_select="audiodsp celp_math"
