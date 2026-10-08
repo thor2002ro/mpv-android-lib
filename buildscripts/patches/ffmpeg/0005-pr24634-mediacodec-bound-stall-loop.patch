@@ -1,0 +1,66 @@
+Subject: [PATCH] Bound MediaCodec input/output no-progress loop to five seconds
+
+Upstream proposal: https://code.ffmpeg.org/FFmpeg/FFmpeg/pulls/24634
+Adapted to master e0e6ca1e29ef3f6b1e9b7d8656fe341eee8cf647 and local Dolby Vision patches.
+
+diff --git a/libavcodec/mediacodecdec.c b/libavcodec/mediacodecdec.c
+index 8c6c8fc..824ae35 100644
+--- a/libavcodec/mediacodecdec.c
++++ b/libavcodec/mediacodecdec.c
+@@ -35,6 +35,7 @@
+ #include "libavutil/mathematics.h"
+ #include "libavutil/pixfmt.h"
+ #include "libavutil/internal.h"
++#include "libavutil/time.h"
+ 
+ #include "avcodec.h"
+ #include "codec_internal.h"
+@@ -627,11 +628,21 @@ done:
+     return ret;
+ }
+ 
++/* If the input port stays full and the output port keeps saying "try again"
++ * at the same time, neither side can make progress on its own: this is only
++ * expected to last a handful of iterations while the decoder is warming up.
++ * A codec that never recovers from this state (observed with a stalled
++ * software decoder) turns the loop below into an unbounded busy spin with no
++ * sleep between iterations, hanging the calling thread forever. Bound the
++ * total time spent in that specific state instead of looping unconditionally. */
++#define MEDIACODEC_NO_PROGRESS_TIMEOUT_US (5 * 1000000)
++
+ static int mediacodec_receive_frame(AVCodecContext *avctx, AVFrame *frame)
+ {
+     MediaCodecContext *s = avctx->priv_data;
+     int ret;
+     ssize_t index;
++    int64_t no_progress_since = 0;
+ 
+     /* In delay_flush mode, wait until the user has released or rendered
+        all retained frames. */
+@@ -660,11 +671,25 @@ static int mediacodec_receive_frame(AVCodecContext *avctx, AVFrame *frame)
+                  * return EAGAIN, which violate the design.
+                  */
+                 if (ff_AMediaCodec_infoTryAgainLater(s->ctx->codec, index) &&
+-                    ret == AVERROR(EAGAIN))
++                    ret == AVERROR(EAGAIN)) {
++                    int64_t now = av_gettime_relative();
++                    if (!no_progress_since)
++                        no_progress_since = now;
++                    if (now - no_progress_since > MEDIACODEC_NO_PROGRESS_TIMEOUT_US) {
++                        av_log(avctx, AV_LOG_ERROR,
++                               "MediaCodec %p made no progress for over %.1fs: "
++                               "input buffer pool stayed full while no output "
++                               "was produced. Treating the decoder as stalled.\n",
++                               s->ctx->codec,
++                               MEDIACODEC_NO_PROGRESS_TIMEOUT_US / 1000000.0);
++                        return AVERROR_EXTERNAL;
++                    }
+                     continue;
++                }
+                 return ret;
+             }
+             s->ctx->current_input_buffer = index;
++            no_progress_since = 0;
+         }
+ 
+         /* try to flush any buffered packet data */
