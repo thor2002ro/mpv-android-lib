@@ -63,15 +63,19 @@ MediaCodec input/output busy loop after five seconds without progress. The
 existing Dolby Vision profile is preserved. The MediaCodec buffer and HEVC
 cleanup fixes from upstream PR #22550 are already in master.
 
-ARM64 builds include the experimental [NEON JIT scaler proposal #23923](https://code.ffmpeg.org/FFmpeg/FFmpeg/pulls/23923)
+ARM builds include the experimental [NEON JIT scaler proposal #23923](https://code.ffmpeg.org/FFmpeg/FFmpeg/pulls/23923)
 with LLVM 21.1.8. Building it requires CMake 3.20 or newer and a host C++
 compiler. LLVM assembler components are linked into libswscale; the existing
-shared Android C++ runtime is required. Other ABIs do not build LLVM.
+shared Android C++ runtime is required. ARMv7 builds use LLVM's ARM assembler
+through patch `0014-pr23923-armv7-neon-jit.patch`; x86 ABIs do not build LLVM.
 
 The JIT backend retains upstream runtime opt-in. A caller using the modern
 `sws_scale_frame` API can allow it with `sws_backends=stable+aarch64_jit` on
-ARM64 (or `SWS_UNSTABLE`); unsupported operations fall back to another allowed
-backend.
+ARM64 or `sws_backends=stable+arm_jit` on ARMv7 (or `SWS_UNSTABLE`); unsupported
+operations fall back to another allowed backend. The ARMv7 backend fuses
+unsigned 8-bit planar/packed reads and writes, channel moves, constants, shifts
+and clamps. Higher precision and filter operations use the fallback backends.
+It can be excluded at configure time with `--disable-arm-neon-jit`.
 MPV's current `sws_scale` path and this library's thumbnail code use the legacy
 API and do not enter the JIT backend. Hardware decoding also bypasses this CPU
 scaler. Enabling it for those callers requires a separate API migration and
@@ -92,9 +96,6 @@ The ARMv7 YUV-to-RGB selector now supplies chroma-aligned slices and works
 with the NDK integrated assembler; GNU-specific RGB-to-YUV routines retain
 their existing assembler check. Conversion wrappers return the processed row
 count, as required by the scaler API.
-
-Focused checks (MediaCodec metadata requires a configured native-host
-FFmpeg source tree with libavutil built):
 
 
 If you've made changes to a single component (e.g. ffmpeg or mpv) and want a new build you can of course just run ./buildall.sh but it's also possible to just build a single component like this:
@@ -128,3 +129,16 @@ If you make any changes to libraries (ffmpeg, mpv, ...) or mpv-android native co
 ```
 
 then build the project from Android Studio.
+
+## ARMv7 LLVM JIT
+
+Archived device measurements and validation are in the
+[ARMv7 JIT report](../.docs/armv7-neon-jit/ffmpeg-armv7-jit-linear-loads.md).
+The temporary regression and benchmark sources have been removed.
+
+The ARM assembler caches up to eight successful kernels, each limited to
+16 KiB of assembly and 16 KiB of code. Cache hits receive separate W^X
+allocations and cache eviction never invalidates a running kernel. Compilation
+timings distinguish cache hits from previously unseen kernels. Contiguous rows
+are dispatched as one rectangle; padded/negative strides and row-offset maps
+retain the per-row path.

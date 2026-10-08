@@ -1,0 +1,106 @@
+Subject: [PATCH] avutil/arm: add bounded ARMv7 NEON NAL start-code search
+
+ARMv7 counterpart to the NAL search introduced by FFmpeg PR #21475:
+https://code.ffmpeg.org/FFmpeg/FFmpeg/pulls/21475
+Applies after 0009-pr21475-aarch64-neon-nal-search.patch on master
+ e0e6ca1e29ef3f6b1e9b7d8656fe341eee8cf647.
+
+Reuse the shared API, scalar fallback, and once-only CPU dispatch. Skip
+16-byte blocks without adjacent zero bytes, retaining a
+last-byte-zero candidate for pairs crossing blocks. Reuse the existing
+bounded four-byte C scanner for candidates and tails. The measured short
+64-byte cases use C directly. This avoids byte-by-byte candidate scanning
+and its regressions on isolated zeros and zero-heavy inputs. Only
+caller-saved registers are used; Cortex-A8, Thumb-2, and Android softfp are
+supported. No public header or API changes.
+diff --git a/libavutil/arm/Makefile b/libavutil/arm/Makefile
+index 2988df0..5051661 100644
+--- a/libavutil/arm/Makefile
++++ b/libavutil/arm/Makefile
+@@ -8,3 +8,4 @@ VFP-OBJS += arm/float_dsp_init_vfp.o                                    \
+ 
+ NEON-OBJS += arm/float_dsp_init_neon.o                                  \
+              arm/float_dsp_neon.o                                       \
++             arm/nal.o                                                  \
+diff --git a/libavutil/arm/nal.S b/libavutil/arm/nal.S
+new file mode 100644
+index 0000000..b03abce
+--- /dev/null
++++ b/libavutil/arm/nal.S
+@@ -0,0 +1,47 @@
++/*
++ * ARM NEON NAL start-code search
++ *
++ * This file is part of FFmpeg.
++ *
++ * FFmpeg is free software; you can redistribute it and/or
++ * modify it under the terms of the GNU Lesser General Public
++ * License as published by the Free Software Foundation; either
++ * version 2.1 of the License, or (at your option) any later version.
++ *
++ * FFmpeg is distributed in the hope that it will be useful,
++ * but WITHOUT ANY WARRANTY; without even the implied warranty of
++ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
++ * Lesser General Public License for more details.
++ *
++ * You should have received a copy of the GNU Lesser General Public
++ * License along with FFmpeg; if not, write to the Free Software
++ * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA
++ */
++
++#include "libavutil/arm/asm.S"
++
++function ff_nal_find_startcode_neon, export=1
++        sub             r2, r1, r0
++        cmp             r2, #64
++        bls             2f
++1:      sub             r2, r1, r0
++        cmp             r2, #18
++        blo             2f
++        vld1.8          {d0-d1}, [r0]
++        vceq.i8         q0, q0, #0
++        // A last-byte zero remains a candidate for a pair crossing this block.
++        vmov.u8         r3, d1[7]
++        vext.8          q1, q0, q0, #1
++        vand            q0, q0, q1
++        vorr            d0, d0, d1
++        vpmax.u8        d0, d0, d0
++        vpmax.u8        d0, d0, d0
++        vpmax.u8        d0, d0, d0
++        vmov.32         r2, d0[0]
++        orrs            r2, r2, r3
++        bne             2f
++        add             r0, r0, #16
++        b               1b
++        // Reuse the four-byte C detail scan for candidates, short buffers, and tails.
++2:      b               ff_nal_find_startcode_c
++endfunc
+diff --git a/libavutil/nal.c b/libavutil/nal.c
+index d6e360a..f847c21 100644
+--- a/libavutil/nal.c
++++ b/libavutil/nal.c
+@@ -27,12 +27,14 @@
+ #include "thread.h"
+ #if ARCH_AARCH64 && HAVE_NEON
+ #include "aarch64/cpu.h"
++#elif ARCH_ARM && HAVE_NEON
++#include "arm/cpu.h"
+ #endif
+ #include "nal.h"
+ 
+ const uint8_t *ff_nal_find_startcode_c(const uint8_t *p, const uint8_t *end);
+ 
+-#if ARCH_AARCH64 && HAVE_NEON
++#if (ARCH_AARCH64 || ARCH_ARM) && HAVE_NEON
+ const uint8_t *ff_nal_find_startcode_neon(const uint8_t *p, const uint8_t *end);
+ #endif
+ 
+@@ -67,7 +69,7 @@ static AVOnce nal_func_init_once = AV_ONCE_INIT;
+ 
+ static void nal_find_startcode_init(void)
+ {
+-#if ARCH_AARCH64 && HAVE_NEON
++#if (ARCH_AARCH64 || ARCH_ARM) && HAVE_NEON
+     int cpu_flags = av_get_cpu_flags();
+     if (have_neon(cpu_flags))
+         nal_find_startcode_func = ff_nal_find_startcode_neon;

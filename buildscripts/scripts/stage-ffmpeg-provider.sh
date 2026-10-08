@@ -236,7 +236,7 @@ EOF
         fi
         cp -- "$provider_main/jniLibs/$android_abi/$library" "$abi_root/$library"
         stl=none
-        [[ "$module" == swscale && "$android_abi" == arm64-v8a ]] && stl=c++_shared
+        [[ "$module" == swscale && ( "$android_abi" == arm64-v8a || "$android_abi" == armeabi-v7a ) ]] && stl=c++_shared
         cat > "$abi_root/abi.json" <<EOF
 {
   "abi": "$android_abi",

@@ -25,7 +25,7 @@ cpuflags=
 architecture_args=()
 [[ "$ndk_triple" == "arm"* || "$ndk_triple" == "aarch64"* ]] && architecture_args+=(--enable-neon)
 [[ "$ndk_triple" == "arm"* ]] && architecture_args+=(--enable-thumb)
-if [[ "$ndk_triple" == "aarch64"* ]]; then
+if [[ "$ndk_triple" == "aarch64"* || "$ndk_triple" == "arm"* ]]; then
 	architecture_args+=(--enable-llvm --enable-unstable --llvm-config="$prefix_dir/bin/llvm-config")
 fi
 

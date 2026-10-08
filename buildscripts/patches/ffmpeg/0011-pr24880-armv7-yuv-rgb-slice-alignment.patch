@@ -1,0 +1,56 @@
+Subject: [PATCH] swscale/arm: align NEON RGB slices to source chroma
+
+ARMv7 counterpart of PR #24880:
+https://code.ffmpeg.org/FFmpeg/FFmpeg/pulls/24880
+
+NV12, NV21 and YUV420P NEON converters process two luma rows per iteration.
+Align threaded slices to chroma rows while preserving larger alignment.
+Limit the GNU assembler alias check to RGB-to-YUV routines that need it;
+the existing YUV-to-RGB assembly also works with the NDK integrated assembler.
+
+diff --git a/libswscale/arm/swscale_unscaled.c b/libswscale/arm/swscale_unscaled.c
+index c526ea1..e540d30 100644
+--- a/libswscale/arm/swscale_unscaled.c
++++ b/libswscale/arm/swscale_unscaled.c
+@@ -23,6 +23,7 @@
+ #include "libswscale/swscale_internal.h"
+ #include "libavutil/arm/cpu.h"
+ 
++#if HAVE_NEON
+ #if HAVE_AS_DN_DIRECTIVE
+ extern void rgbx_to_nv12_neon_32(const uint8_t *src, uint8_t *y, uint8_t *chroma,
+                 int width, int height,
+@@ -62,6 +63,8 @@ static int rgbx_to_nv12_neon_16_wrapper(SwsInternal *context, const uint8_t *con
+     return 0;
+ }
+ 
++#endif
++
+ #define YUV_TO_RGB_TABLE                                                                    \
+         c->yuv2rgb_v2r_coeff,                                                               \
+         c->yuv2rgb_u2g_coeff,                                                               \
+@@ -150,6 +153,7 @@ DECLARE_FF_NVX_TO_ALL_RGBX_FUNCS(nv21)
+         && !(c->opts.src_w & 15)                                                            \
+         && !accurate_rnd) {                                                                 \
+         c->convert_unscaled = ifmt##_to_##ofmt##_neon_wrapper;                              \
++        c->dst_slice_align = FFMAX(c->dst_slice_align, 1 << c->chrSrcVSubSample);            \
+     }                                                                                       \
+ } while (0)
+ 
+@@ -162,6 +166,7 @@ DECLARE_FF_NVX_TO_ALL_RGBX_FUNCS(nv21)
+ 
+ static void get_unscaled_swscale_neon(SwsInternal *c) {
+     int accurate_rnd = c->opts.flags & SWS_ACCURATE_RND;
++#if HAVE_AS_DN_DIRECTIVE
+     if (c->opts.src_format == AV_PIX_FMT_RGBA
+             && c->opts.dst_format == AV_PIX_FMT_NV12
+             && (c->opts.src_w >= 16)) {
+@@ -169,6 +174,8 @@ static void get_unscaled_swscale_neon(SwsInternal *c) {
+                                            : rgbx_to_nv12_neon_16_wrapper;
+     }
+ 
++#endif
++
+     SET_FF_NVX_TO_ALL_RGBX_FUNC(nv12, NV12, accurate_rnd);
+     SET_FF_NVX_TO_ALL_RGBX_FUNC(nv21, NV21, accurate_rnd);
+     SET_FF_NVX_TO_ALL_RGBX_FUNC(yuv420p, YUV420P, accurate_rnd);

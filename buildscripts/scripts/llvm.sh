@@ -11,6 +11,7 @@ elif [ "$1" != build ]; then
 fi
 case "$ndk_triple" in
     aarch64*) llvm_target=AArch64; llvm_abi=arm64-v8a; llvm_triple=aarch64-linux-android ;;
+    arm*) llvm_target=ARM; llvm_abi=armeabi-v7a; llvm_triple=armv7a-linux-androideabi ;;
     *) exit 0 ;;
 esac
 

@@ -1,0 +1,45 @@
+Subject: [PATCH] swscale/arm: report converted rows from NEON wrappers
+
+The legacy sws_scale API returns the output row count. These wrappers
+completed conversion but returned zero; return the processed slice height.
+Verified with the Android legacy API device benchmark and threaded test.
+
+diff --git a/libswscale/arm/swscale_unscaled.c b/libswscale/arm/swscale_unscaled.c
+--- a/libswscale/arm/swscale_unscaled.c
++++ b/libswscale/arm/swscale_unscaled.c
+@@ -46,7 +46,7 @@
+             dstStride[0], dstStride[1], srcStride[0],
+             context->input_rgb2yuv_table);
+ 
+-    return 0;
++    return srcSliceH;
+ }
+ 
+ static int rgbx_to_nv12_neon_16_wrapper(SwsInternal *context, const uint8_t *const src[],
+@@ -60,7 +60,7 @@
+             dstStride[0], dstStride[1], srcStride[0],
+             context->input_rgb2yuv_table);
+ 
+-    return 0;
++    return srcSliceH;
+ }
+ 
+ #endif
+@@ -96,7 +96,7 @@
+                                  c->yuv2rgb_y_offset >> 6,                                  \
+                                  c->yuv2rgb_y_coeff);                                       \
+                                                                                             \
+-    return 0;                                                                               \
++    return srcSliceH;                                                                               \
+ }                                                                                           \
+ 
+ #define DECLARE_FF_YUVX_TO_ALL_RGBX_FUNCS(yuvx)                                             \
+@@ -130,7 +130,7 @@
+                                  c->yuv2rgb_y_offset >> 6,                                  \
+                                  c->yuv2rgb_y_coeff);                                       \
+                                                                                             \
+-    return 0;                                                                               \
++    return srcSliceH;                                                                               \
+ }                                                                                           \
+ 
+ #define DECLARE_FF_NVX_TO_ALL_RGBX_FUNCS(nvx)                                               \
