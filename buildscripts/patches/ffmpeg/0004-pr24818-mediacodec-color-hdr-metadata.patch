@@ -1,0 +1,128 @@
+Subject: [PATCH] Pass Android color and HDR metadata while preserving Dolby Vision profile
+
+Upstream proposal: https://code.ffmpeg.org/FFmpeg/FFmpeg/pulls/24818
+Adapted to master e0e6ca1e29ef3f6b1e9b7d8656fe341eee8cf647 and local Dolby Vision patches.
+
+diff --git a/libavcodec/mediacodecdec.c b/libavcodec/mediacodecdec.c
+index 71b2968..8c6c8fc 100644
+--- a/libavcodec/mediacodecdec.c
++++ b/libavcodec/mediacodecdec.c
+@@ -31,6 +31,8 @@
+ #include "libavutil/mem.h"
+ #include "libavutil/opt.h"
+ #include "libavutil/intreadwrite.h"
++#include "libavutil/mastering_display_metadata.h"
++#include "libavutil/mathematics.h"
+ #include "libavutil/pixfmt.h"
+ #include "libavutil/internal.h"
+ 
+@@ -347,6 +349,82 @@ static int mediacodec_set_dovi_format(AVCodecContext *avctx,
+     return 0;
+ }
+ 
++static uint16_t mediacodec_hdr_static_value(AVRational value, AVRational unit)
++{
++    int64_t scaled;
++
++    if (value.num <= 0 || value.den <= 0)
++        return 0;
++
++    scaled = av_rescale_q(1, value, unit);
++    return (uint16_t)av_clip64(scaled, 0, UINT16_MAX);
++}
++
++static void mediacodec_set_hdr_static_info(AVCodecContext *avctx,
++                                            FFAMediaFormat *format)
++{
++    const AVPacketSideData *mastering_sd =
++        ff_get_coded_side_data(avctx, AV_PKT_DATA_MASTERING_DISPLAY_METADATA);
++    const AVPacketSideData *light_sd =
++        ff_get_coded_side_data(avctx, AV_PKT_DATA_CONTENT_LIGHT_LEVEL);
++    const AVMasteringDisplayMetadata *mastering = NULL;
++    const AVContentLightMetadata *light = NULL;
++    uint8_t data[25] = { 0 };
++    int has_metadata = 0;
++
++    if (mastering_sd && mastering_sd->size >= sizeof(*mastering))
++        mastering = (const AVMasteringDisplayMetadata *)mastering_sd->data;
++    if (light_sd && light_sd->size >= sizeof(*light))
++        light = (const AVContentLightMetadata *)light_sd->data;
++
++    if (mastering && mastering->has_primaries) {
++        AV_WL16(data + 1,
++                mediacodec_hdr_static_value(mastering->display_primaries[0][0],
++                                            (AVRational){ 1, 50000 }));
++        AV_WL16(data + 3,
++                mediacodec_hdr_static_value(mastering->display_primaries[0][1],
++                                            (AVRational){ 1, 50000 }));
++        AV_WL16(data + 5,
++                mediacodec_hdr_static_value(mastering->display_primaries[1][0],
++                                            (AVRational){ 1, 50000 }));
++        AV_WL16(data + 7,
++                mediacodec_hdr_static_value(mastering->display_primaries[1][1],
++                                            (AVRational){ 1, 50000 }));
++        AV_WL16(data + 9,
++                mediacodec_hdr_static_value(mastering->display_primaries[2][0],
++                                            (AVRational){ 1, 50000 }));
++        AV_WL16(data + 11,
++                mediacodec_hdr_static_value(mastering->display_primaries[2][1],
++                                            (AVRational){ 1, 50000 }));
++        AV_WL16(data + 13,
++                mediacodec_hdr_static_value(mastering->white_point[0],
++                                            (AVRational){ 1, 50000 }));
++        AV_WL16(data + 15,
++                mediacodec_hdr_static_value(mastering->white_point[1],
++                                            (AVRational){ 1, 50000 }));
++        has_metadata = 1;
++    }
++
++    if (mastering && mastering->has_luminance) {
++        AV_WL16(data + 17,
++                mediacodec_hdr_static_value(mastering->max_luminance,
++                                            (AVRational){ 1, 1 }));
++        AV_WL16(data + 19,
++                mediacodec_hdr_static_value(mastering->min_luminance,
++                                            (AVRational){ 1, 10000 }));
++        has_metadata = 1;
++    }
++
++    if (light) {
++        AV_WL16(data + 21, FFMIN(light->MaxCLL, UINT16_MAX));
++        AV_WL16(data + 23, FFMIN(light->MaxFALL, UINT16_MAX));
++        has_metadata = 1;
++    }
++
++    if (has_metadata)
++        ff_AMediaFormat_setBuffer(format, "hdr-static-info", data, sizeof(data));
++}
++
+ static av_cold int mediacodec_decode_init(AVCodecContext *avctx)
+ {
+     int ret;
+@@ -477,8 +555,26 @@ static av_cold int mediacodec_decode_init(AVCodecContext *avctx)
+     ff_AMediaFormat_setString(format, "mime", codec_mime);
+ 
+     if (avctx->codec_type == AVMEDIA_TYPE_VIDEO) {
++        int value;
+         ff_AMediaFormat_setInt32(format, "width", avctx->width);
+         ff_AMediaFormat_setInt32(format, "height", avctx->height);
++        value = ff_AMediaFormatColorRange_from_AVColorRange(avctx->color_range);
++        if (value != COLOR_RANGE_UNSPECIFIED)
++            ff_AMediaFormat_setInt32(format, "color-range", value);
++
++        value = ff_AMediaFormatColorStandard_from_AVColorSpace(avctx->colorspace);
++        if (value != COLOR_STANDARD_UNSPECIFIED)
++            ff_AMediaFormat_setInt32(format, "color-standard", value);
++
++        value = ff_AMediaFormatColorTransfer_from_AVColorTransfer(avctx->color_trc);
++        if (value != COLOR_TRANSFER_UNSPECIFIED)
++            ff_AMediaFormat_setInt32(format, "color-transfer", value);
++
++        value = ff_AMediaCodecProfile_getProfileFromAVCodecContext(avctx);
++        if (value > 0 && strcmp(codec_mime, "video/dolby-vision"))
++            ff_AMediaFormat_setInt32(format, "profile", value);
++
++        mediacodec_set_hdr_static_info(avctx, format);
+     } else {
+         ff_AMediaFormat_setInt32(format, "channel-count", avctx->ch_layout.nb_channels);
+         ff_AMediaFormat_setInt32(format, "sample-rate", avctx->sample_rate);
