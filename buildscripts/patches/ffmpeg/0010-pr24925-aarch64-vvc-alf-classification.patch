@@ -1,0 +1,365 @@
+From: Aaditya Agarwal <aadityaagarwal894@gmail.com>
+Subject: [PATCH] aarch64/vvc: resolve ALF classification indices in assembly
+
+Upstream proposal: https://code.ffmpeg.org/FFmpeg/FFmpeg/pulls/24925
+Patchwork snapshot: https://patchwork.ffmpeg.org/project/ffmpeg/patch/61096/
+Adapted to FFmpeg master e0e6ca1e29ef3f6b1e9b7d8656fe341eee8cf647.
+
+Preserve the upstream dual-block helper and 64-bit direction products.
+Remove the replaced scalar helper from the ARM64 template, correct prototype
+comments, and use the existing generic classifier when dimensions cannot be
+handled by the assembly pair kernels. Export that classifier internally for
+8/10/12-bit fallback; normal aligned blocks keep the existing NEON dispatch.
+The decoder is already enabled by the build's default decoder selection.
+
+diff --git a/libavcodec/aarch64/vvc/alf.S b/libavcodec/aarch64/vvc/alf.S
+index bd8317a..0657045 100644
+--- a/libavcodec/aarch64/vvc/alf.S
++++ b/libavcodec/aarch64/vvc/alf.S
+@@ -491,8 +491,229 @@ function ff_alf_classify_grad_8_neon, export=1
+ endfunc
+ 
+ function ff_alf_classify_grad_10_neon, export=1
++        ff_alf_classify_grad 2
+ endfunc
+ 
+ function ff_alf_classify_grad_12_neon, export=1
+         ff_alf_classify_grad 2
+ endfunc
++
++// ff_alf_get_idx_neon: dual-block alf_get_idx for two 4x4 blocks.
++//
++// Resolve class_idx and transpose_idx for both 4x4 blocks in one call.
++//
++// Arguments (AArch64 ABI):
++//   x0  = class_idx     (int*, output, 2 ints written: [0] and [1])
++//   x1  = transpose_idx (int*, output, 2 ints written: [0] and [1])
++//   x2  = sum0          (const int[4]: {V, H, D0, D1} for block 0)
++//   x3  = sum1          (const int[4]: {V, H, D0, D1} for block 1)
++//   w4  = ac            (2 or 3, the activity scale factor)
++//   w5  = bit_depth     (8, 10, or 12)
++//
++// Register convention (leaf, no stack frame):
++//   v16, v17 - NEON: sum0 and sum1 loaded once and held throughout.
++//   w6       - dir1_N as 0/1 integer.
++//   w7       - strong_offset intermediate.
++//   w8-w15   - scratch (thresholds, index values, temporaries).
++//   w16,w17  - hvd1_N, hvd0_N (dominant max/min gradient pair).
++//   x9,x10   - 64-bit cross-product operands (promote to avoid 32-bit overflow).
++//
++// Mathematical reference (VVC ALF classification):
++//   dir_hv  = V <= H
++//   hv1     = max(V, H);   hv0 = min(V, H)
++//   dir_d   = D0 <= D1
++//   d1      = max(D0, D1); d0  = min(D0, D1)
++//   dir1    = d1*hv0 <= hv1*d0          (cross-product, 64-bit safe)
++//   hvd1    = dir1 ? hv1 : d1
++//   hvd0    = dir1 ? hv0 : d0
++//   sum_hv  = V + H
++//   base    = arg_var[ clip(sum_hv*ac >> (bit_depth-1), 0, 15) ]
++//   if 2*hvd1 > 9*hvd0:   class_idx = base + ((dir1<<1)+2)*5
++//   elif hvd1 > 2*hvd0:   class_idx = base + ((dir1<<1)+1)*5
++//   else:                  class_idx = base
++//   transpose_idx = dir_d*2 + dir_hv
++//
++function ff_alf_get_idx_neon, export=1
++        // Load both 4-direction gradient sums once and hold in NEON.
++        // v16 = sum0: { V0, H0, D0_0, D1_0 }  (4 Ã— u32)
++        // v17 = sum1: { V1, H1, D0_1, D1_1 }
++        ld1             {v16.4s}, [x2]
++        ld1             {v17.4s}, [x3]
++
++        // ------------------------------------------------------------------
++        // BLOCK 0
++        // ------------------------------------------------------------------
++
++        // Step 1a: VH max / min for block 0
++        mov             w8,  v16.s[0]           // V0
++        mov             w9,  v16.s[1]           // H0
++        cmp             w8,  w9
++        csel            w10, w8,  w9,  gt       // hv1_0 = max(V0, H0)
++        csel            w11, w9,  w8,  gt       // hv0_0 = min(V0, H0)
++
++        // Step 1b: D max / min for block 0
++        mov             w8,  v16.s[2]           // D0_0
++        mov             w9,  v16.s[3]           // D1_0
++        cmp             w8,  w9
++        csel            w13, w8,  w9,  gt       // d1_0 = max(D0_0, D1_0)
++        csel            w14, w9,  w8,  gt       // d0_0 = min(D0_0, D1_0)
++
++        // Step 2: dir1_0 = (d1_0 * hv0_0 <= hv1_0 * d0_0)  [64-bit, no overflow]
++        // Use x9/x12 (caller-saved) for 64-bit products to avoid clobbering
++        // w10 (hv1_0) and w11 (hv0_0) which are needed for the csel below.
++        umull           x9,  w13, w11           // x9  = d1_0 * hv0_0
++        umull           x12, w10, w14           // x12 = hv1_0 * d0_0  (w10 preserved)
++        cmp             x9,  x12               // ls means d1*hv0 <= hv1*d0 (unsigned) â†’ dir1=1
++        csel            w16, w10, w13, ls       // hvd1_0: dir1=1 â†’ hv1_0;  else d1_0
++        csel            w17, w11, w14, ls       // hvd0_0: dir1=1 â†’ hv0_0;  else d0_0
++        cset            w6,  ls                 // dir1_0 as integer 0/1
++
++        // Step 3a: arg_var index for block 0
++        //   idx = clip( (V0+H0) * ac >> (bit_depth-1), 0, 15 )
++        mov             w8,  v16.s[0]           // V0
++        mov             w9,  v16.s[1]           // H0
++        add             w8,  w8,  w9            // sum_hv_0 = V0 + H0
++        mul             w8,  w8,  w4            // * ac
++        sub             w9,  w5,  #1            // bit_depth - 1
++        lsr             w8,  w8,  w9            // >> (bit_depth - 1)
++        mov             w9,  #15
++        cmp             w8,  w9
++        csel            w8,  w9,  w8,  gt       // clip to [0, 15]
++        movrel          x11, alf_arg_var
++        ldr             w8,  [x11, w8, uxtw #2] // class_idx_base_0 = arg_var[idx]
++
++        // Step 3b: threshold increments (branchless)
++        //   Compute 2*hvd0 and 9*hvd0 for the two threshold comparisons.
++        lsl             w9,  w17, #1            // 2*hvd0_0
++        lsl             w12, w17, #3
++        add             w12, w12, w17           // 9*hvd0_0
++        lsl             w13, w16, #1            // 2*hvd1_0
++
++        cmp             w13, w12
++        cset            w14, hi                 // strong_0 = (2*hvd1 > 9*hvd0)
++        cmp             w16, w9
++        cset            w15, hi                 // medium_0 = (hvd1 > 2*hvd0)
++
++        // strong_offset = ((dir1<<1)+2)*5; medium_offset = ((dir1<<1)+1)*5
++        lsl             w6,  w6,  #1            // dir1_0 << 1
++        add             w7,  w6,  #2
++        add             w7,  w7,  w7, lsl #2    // strong_offset = w7 * 5
++        add             w12, w6,  #1
++        add             w12, w12, w12, lsl #2   // medium_offset = w12 * 5
++
++        // strong_inc: strong ? strong_offset : 0
++        cmp             w14, #1
++        csel            w7,  w7,  wzr, eq
++
++        // medium_inc: (!strong & medium) ? medium_offset : 0
++        eor             w9,  w14, #1            // ~strong_0
++        and             w9,  w9,  w15           // medium_only_0
++        mul             w12, w12, w9            // medium_inc (0 if !medium_only)
++
++        add             w8,  w8,  w7            // + strong_inc
++        add             w8,  w8,  w12           // + medium_inc â†’ class_idx_0
++
++        // Step 4: transpose_idx_0 = dir_d_0*2 + dir_hv_0
++        mov             w9,  v16.s[0]           // V0
++        mov             w10, v16.s[1]           // H0
++        cmp             w9,  w10
++        cset            w9,  le                 // dir_hv_0 = (V0 <= H0)
++        mov             w10, v16.s[2]           // D0_0
++        mov             w11, v16.s[3]           // D1_0
++        cmp             w10, w11
++        cset            w10, le                 // dir_d_0 = (D0_0 <= D1_0)
++        lsl             w10, w10, #1
++        add             w10, w10, w9            // transpose_idx_0 = dir_d*2 + dir_hv
++
++        // Store block 0 outputs
++        str             w8,  [x0]
++        str             w10, [x1]
++
++        // ------------------------------------------------------------------
++        // BLOCK 1  (identical pipeline, fed from v17)
++        // ------------------------------------------------------------------
++
++        // Step 1a: VH for block 1
++        mov             w8,  v17.s[0]           // V1
++        mov             w9,  v17.s[1]           // H1
++        cmp             w8,  w9
++        csel            w10, w8,  w9,  gt       // hv1_1
++        csel            w11, w9,  w8,  gt       // hv0_1
++
++        // Step 1b: D for block 1
++        mov             w8,  v17.s[2]           // D0_1
++        mov             w9,  v17.s[3]           // D1_1
++        cmp             w8,  w9
++        csel            w13, w8,  w9,  gt       // d1_1
++        csel            w14, w9,  w8,  gt       // d0_1
++
++        // Step 2: dir1_1 (same pipeline)
++        umull           x9,  w13, w11           // x9  = d1_1 * hv0_1
++        umull           x12, w10, w14           // x12 = hv1_1 * d0_1  (w10 intact)
++        cmp             x9,  x12
++        csel            w16, w10, w13, ls       // hvd1_1
++        csel            w17, w11, w14, ls       // hvd0_1
++        cset            w6,  ls                 // dir1_1
++
++        // Step 3a: arg_var index for block 1
++        mov             w8,  v17.s[0]           // V1
++        mov             w9,  v17.s[1]           // H1
++        add             w8,  w8,  w9
++        mul             w8,  w8,  w4
++        sub             w9,  w5,  #1
++        lsr             w8,  w8,  w9
++        mov             w9,  #15
++        cmp             w8,  w9
++        csel            w8,  w9,  w8,  gt
++        movrel          x11, alf_arg_var
++        ldr             w8,  [x11, w8, uxtw #2]
++
++        // Step 3b: thresholds for block 1
++        lsl             w9,  w17, #1            // 2*hvd0_1
++        lsl             w12, w17, #3
++        add             w12, w12, w17           // 9*hvd0_1
++        lsl             w13, w16, #1            // 2*hvd1_1
++
++        cmp             w13, w12
++        cset            w14, hi                 // strong_1
++        cmp             w16, w9
++        cset            w15, hi                 // medium_1
++
++        lsl             w6,  w6,  #1
++        add             w7,  w6,  #2
++        add             w7,  w7,  w7, lsl #2    // strong_offset_1 = w7 * 5
++        add             w12, w6,  #1
++        add             w12, w12, w12, lsl #2   // medium_offset_1 = w12 * 5
++
++        cmp             w14, #1
++        csel            w7,  w7,  wzr, eq       // strong_inc_1
++
++        eor             w9,  w14, #1
++        and             w9,  w9,  w15           // medium_only_1
++        mul             w12, w12, w9            // medium_inc_1
++
++        add             w8,  w8,  w7
++        add             w8,  w8,  w12           // class_idx_1 final
++
++        // Step 4: transpose_idx_1
++        mov             w9,  v17.s[0]
++        mov             w10, v17.s[1]
++        cmp             w9,  w10
++        cset            w9,  le                 // dir_hv_1
++        mov             w10, v17.s[2]
++        mov             w11, v17.s[3]
++        cmp             w10, w11
++        cset            w10, le                 // dir_d_1
++        lsl             w10, w10, #1
++        add             w10, w10, w9            // transpose_idx_1
++
++        // Store block 1 outputs
++        str             w8,  [x0, #4]
++        str             w10, [x1, #4]
++
++        ret
++endfunc
++
++const alf_arg_var
++        .word 0, 1, 2, 2, 2, 2, 2, 3, 3, 3, 3, 3, 3, 3, 3, 4
++endconst
+diff --git a/libavcodec/aarch64/vvc/alf_template.c b/libavcodec/aarch64/vvc/alf_template.c
+index 03bf905..08bfe4a 100644
+--- a/libavcodec/aarch64/vvc/alf_template.c
++++ b/libavcodec/aarch64/vvc/alf_template.c
+@@ -156,39 +156,10 @@ static void FUNC2(alf_filter_chroma, BIT_DEPTH, _neon)(uint8_t *_dst,
+     }
+ }
+ 
+-#define ALF_DIR_VERT        0
+-#define ALF_DIR_HORZ        1
+-#define ALF_DIR_DIGA0       2
+-#define ALF_DIR_DIGA1       3
+-
+-static void FUNC(alf_get_idx)(int *class_idx, int *transpose_idx, const int *sum, const int ac)
+-{
+-    static const int arg_var[] = {0, 1, 2, 2, 2, 2, 2, 3, 3, 3, 3, 3, 3, 3, 3, 4 };
+-
+-    int hv0, hv1, dir_hv, d0, d1, dir_d, hvd1, hvd0, sum_hv, dir1;
+-
+-    dir_hv = sum[ALF_DIR_VERT] <= sum[ALF_DIR_HORZ];
+-    hv1    = FFMAX(sum[ALF_DIR_VERT], sum[ALF_DIR_HORZ]);
+-    hv0    = FFMIN(sum[ALF_DIR_VERT], sum[ALF_DIR_HORZ]);
+-
+-    dir_d  = sum[ALF_DIR_DIGA0] <= sum[ALF_DIR_DIGA1];
+-    d1     = FFMAX(sum[ALF_DIR_DIGA0], sum[ALF_DIR_DIGA1]);
+-    d0     = FFMIN(sum[ALF_DIR_DIGA0], sum[ALF_DIR_DIGA1]);
+-
+-    //promote to avoid overflow
+-    dir1 = (uint64_t)d1 * hv0 <= (uint64_t)hv1 * d0;
+-    hvd1 = dir1 ? hv1 : d1;
+-    hvd0 = dir1 ? hv0 : d0;
+-
+-    sum_hv = sum[ALF_DIR_HORZ] + sum[ALF_DIR_VERT];
+-    *class_idx = arg_var[av_clip_uintp2(sum_hv * ac >> (BIT_DEPTH - 1), 4)];
+-    if (hvd1 * 2 > 9 * hvd0)
+-        *class_idx += ((dir1 << 1) + 2) * 5;
+-    else if (hvd1 > 2 * hvd0)
+-        *class_idx += ((dir1 << 1) + 1) * 5;
+-
+-    *transpose_idx = dir_d * 2 + dir_hv;
+-}
++// Resolve two adjacent 4x4 blocks with the AArch64 classification helper.
++void ff_alf_get_idx_neon(int *class_idx, int *transpose_idx,
++                         const int *sum0, const int *sum1,
++                         int ac, int bit_depth);
+ 
+ static void FUNC(alf_classify)(int *class_idx, int *transpose_idx,
+     const uint8_t *_src, const ptrdiff_t _src_stride, const int width, const int height,
+@@ -219,12 +190,9 @@ static void FUNC(alf_classify)(int *class_idx, int *transpose_idx,
+             int sum1[ALF_NUM_DIR];
+             grad = gradient_tmp + (yg + start) * gstride + xg * ALF_NUM_DIR;
+             ff_alf_classify_sum_neon(sum0, sum1, grad, gshift, end-start);
+-            FUNC(alf_get_idx)(class_idx, transpose_idx, sum0, ac);
+-            class_idx++;
+-            transpose_idx++;
+-            FUNC(alf_get_idx)(class_idx, transpose_idx, sum1, ac);
+-            class_idx++;
+-            transpose_idx++;
++            ff_alf_get_idx_neon(class_idx, transpose_idx, sum0, sum1, ac, BIT_DEPTH);
++            class_idx     += 2;
++            transpose_idx += 2;
+         }
+     }
+ 
+@@ -238,6 +206,12 @@ static void FUNC2(alf_classify, BIT_DEPTH, _neon)(int *class_idx, int *transpose
+     const uint8_t *_src, const ptrdiff_t _src_stride, const int width, const int height,
+     const int vb_pos, int *gradient_tmp)
+ {
++    // The assembly gradient and sum kernels process pairs of 4x4 blocks.
++    if (width % (2 * ALF_BLOCK_SIZE) || height % ALF_BLOCK_SIZE) {
++        FUNC2(ff_vvc_alf_classify, BIT_DEPTH, _c)(class_idx, transpose_idx,
++            _src, _src_stride, width, height, vb_pos, gradient_tmp);
++        return;
++    }
+     FUNC2(ff_alf_classify_grad, BIT_DEPTH, _neon)(class_idx, transpose_idx, _src, _src_stride, width, height, vb_pos, (int16_t*)gradient_tmp);
+     FUNC(alf_classify)(class_idx, transpose_idx, _src, _src_stride, width, height, vb_pos, (int16_t*)gradient_tmp);
+ }
+diff --git a/libavcodec/vvc/dsp.h b/libavcodec/vvc/dsp.h
+index 29cdd7e..e05d83e 100644
+--- a/libavcodec/vvc/dsp.h
++++ b/libavcodec/vvc/dsp.h
+@@ -183,4 +183,14 @@ void ff_vvc_dsp_init_aarch64(VVCDSPContext *hpc, const int bit_depth);
+ void ff_vvc_dsp_init_riscv(VVCDSPContext *hpc, const int bit_depth);
+ void ff_vvc_dsp_init_x86(VVCDSPContext *hpc, const int bit_depth);
+ 
++void ff_vvc_alf_classify_8_c(int *class_idx, int *transpose_idx,
++    const uint8_t *src, ptrdiff_t src_stride, int width, int height,
++    int vb_pos, int *gradient_tmp);
++void ff_vvc_alf_classify_10_c(int *class_idx, int *transpose_idx,
++    const uint8_t *src, ptrdiff_t src_stride, int width, int height,
++    int vb_pos, int *gradient_tmp);
++void ff_vvc_alf_classify_12_c(int *class_idx, int *transpose_idx,
++    const uint8_t *src, ptrdiff_t src_stride, int width, int height,
++    int vb_pos, int *gradient_tmp);
++
+ #endif /* AVCODEC_VVC_DSP_H */
+diff --git a/libavcodec/vvc/filter_template.c b/libavcodec/vvc/filter_template.c
+index 6dd7310..80d1ac9 100644
+--- a/libavcodec/vvc/filter_template.c
++++ b/libavcodec/vvc/filter_template.c
+@@ -286,7 +286,7 @@ static void FUNC(alf_get_idx)(int *class_idx, int *transpose_idx, const int *sum
+     *transpose_idx = dir_d * 2 + dir_hv;
+ }
+ 
+-static void FUNC(alf_classify)(int *class_idx, int *transpose_idx,
++void FUNC2(ff_vvc_alf_classify, BIT_DEPTH, _c)(int *class_idx, int *transpose_idx,
+     const uint8_t *_src, const ptrdiff_t _src_stride, const int width, const int height,
+     const int vb_pos, int *gradient_tmp)
+ {
+@@ -857,6 +857,6 @@ static void FUNC(ff_vvc_alf_dsp_init)(VVCALFDSPContext *const alf)
+     alf->filter[LUMA]    = FUNC(alf_filter_luma);
+     alf->filter[CHROMA]  = FUNC(alf_filter_chroma);
+     alf->filter_cc       = FUNC(alf_filter_cc);
+-    alf->classify        = FUNC(alf_classify);
++    alf->classify        = FUNC2(ff_vvc_alf_classify, BIT_DEPTH, _c);
+     alf->recon_coeff_and_clip = FUNC(alf_recon_coeff_and_clip);
+ }

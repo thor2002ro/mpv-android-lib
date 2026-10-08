@@ -1,0 +1,449 @@
+Subject: [PATCH] avutil/aarch64: add NEON NAL start-code search
+
+Upstream proposal: https://code.ffmpeg.org/FFmpeg/FFmpeg/pulls/21475
+Patchwork snapshot: https://patchwork.ffmpeg.org/project/ffmpeg/patch/57934/
+Adapted to FFmpeg master e0e6ca1e29ef3f6b1e9b7d8656fe341eee8cf647.
+
+Move the shared muxer search into avutil and dispatch once to NEON where
+compiled and supported. Install the public header; retain muxer callers.
+Fix upstream search-start underreads, final complete start-code handling,
+and vector-boundary false negatives. Return the exclusive end on misses,
+require no padding, and keep both scalar and assembly loads in range.
+Use a conservative any-zero NEON candidate filter so zero pairs crossing
+vectors and blocks reach the existing detailed scan.
+
+diff --git a/libavformat/nal.c b/libavformat/nal.c
+index 17b0ed1..af1d8d6 100644
+--- a/libavformat/nal.c
++++ b/libavformat/nal.c
+@@ -18,57 +18,20 @@
+  * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA
+  */
+ 
+-#include <stdint.h>
++#include "config.h"
+ #include <string.h>
+ 
+ #include "libavutil/mem.h"
+ #include "libavutil/error.h"
++#include "libavutil/nal.h"
+ #include "libavcodec/defs.h"
+ #include "avio.h"
+ #include "avio_internal.h"
+ #include "nal.h"
+ 
+-static const uint8_t *nal_find_startcode_internal(const uint8_t *p, const uint8_t *end)
++const uint8_t *ff_nal_find_startcode(const uint8_t *p, const uint8_t *end)
+ {
+-    const uint8_t *a = p + 4 - ((intptr_t)p & 3);
+-
+-    for (end -= 3; p < a && p < end; p++) {
+-        if (p[0] == 0 && p[1] == 0 && p[2] == 1)
+-            return p;
+-    }
+-
+-    for (end -= 3; p < end; p += 4) {
+-        uint32_t x = *(const uint32_t*)p;
+-//      if ((x - 0x01000100) & (~x) & 0x80008000) // little endian
+-//      if ((x - 0x00010001) & (~x) & 0x00800080) // big endian
+-        if ((x - 0x01010101) & (~x) & 0x80808080) { // generic
+-            if (p[1] == 0) {
+-                if (p[0] == 0 && p[2] == 1)
+-                    return p;
+-                if (p[2] == 0 && p[3] == 1)
+-                    return p+1;
+-            }
+-            if (p[3] == 0) {
+-                if (p[2] == 0 && p[4] == 1)
+-                    return p+2;
+-                if (p[4] == 0 && p[5] == 1)
+-                    return p+3;
+-            }
+-        }
+-    }
+-
+-    for (end += 3; p < end; p++) {
+-        if (p[0] == 0 && p[1] == 0 && p[2] == 1)
+-            return p;
+-    }
+-
+-    return end + 3;
+-}
+-
+-const uint8_t *ff_nal_find_startcode(const uint8_t *p, const uint8_t *end){
+-    const uint8_t *out = nal_find_startcode_internal(p, end);
+-    if(p<out && out<end && !out[-1]) out--;
+-    return out;
++    return av_nal_find_startcode(p, end);
+ }
+ 
+ static int nal_parse_units(AVIOContext *pb, NALUList *list,
+diff --git a/libavutil/Makefile b/libavutil/Makefile
+index 6e6246c..46ac7eb 100644
+--- a/libavutil/Makefile
++++ b/libavutil/Makefile
+@@ -68,6 +68,7 @@ HEADERS = adler32.h                                                     \
+           mathematics.h                                                 \
+           mastering_display_metadata.h                                  \
+           md5.h                                                         \
++          nal.h                                                          \
+           mem.h                                                         \
+           motion_vector.h                                               \
+           murmur3.h                                                     \
+@@ -167,6 +168,7 @@ OBJS = adler32.o                                                        \
+        md5.o                                                            \
+        mem.o                                                            \
+        murmur3.o                                                        \
++       nal.o                                                            \
+        opt.o                                                            \
+        parseutils.o                                                     \
+        pixdesc.o                                                        \
+diff --git a/libavutil/aarch64/Makefile b/libavutil/aarch64/Makefile
+index b286cfa..db6eca3 100644
+--- a/libavutil/aarch64/Makefile
++++ b/libavutil/aarch64/Makefile
+@@ -5,7 +5,8 @@ OBJS += aarch64/aes_init.o                                            \
+ 
+ ARMV8-OBJS += aarch64/crc.o
+ 
+-NEON-OBJS += aarch64/aes.o                                            \
++NEON-OBJS += aarch64/nal.o                                            \
++             aarch64/aes.o                                            \
+              aarch64/base64.o                                         \
+              aarch64/float_dsp_neon.o                                 \
+              aarch64/tx_float_neon.o                                  \
+diff --git a/libavutil/aarch64/nal.S b/libavutil/aarch64/nal.S
+new file mode 100644
+index 0000000..ef2a1cd
+--- /dev/null
++++ b/libavutil/aarch64/nal.S
+@@ -0,0 +1,157 @@
++/*
++ * ARM NEON-optimized NAL startcode search
++ * Copyright (c) 2024
++ *
++ * This file is part of FFmpeg.
++ *
++ * FFmpeg is free software; you can redistribute it and/or
++ * modify it under the terms of the GNU Lesser General Public
++ * License as published by the Free Software Foundation; either
++ * version 2.1 of the License, or (at your option) any later version.
++ *
++ * FFmpeg is distributed in the hope that it will be useful,
++ * but WITHOUT ANY WARRANTY; without even the implied warranty of
++ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
++ * Lesser General Public License for more details.
++ *
++ * You should have received a copy of the GNU Lesser General Public
++ * License along with FFmpeg; if not, write to the Free Software
++ * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA
++ */
++
++#include "libavutil/aarch64/asm.S"
++
++function ff_nal_find_startcode_neon, export=1
++        and             x2, x0, #-4              // align to 4-byte boundary
++        sub             x7, x1, #2               // last valid start + 1
++        add             x2, x2, #4               // align4 = aligned_p + 4
++        mov             x3, x0                   // p = orig_p
++        cmp             x0, x2
++        ccmp            x7, x0, #0, cc
++        bls             2f                       // skip alignment phase
++
++        // Phase 1: align to 4-byte boundary
++1:      ldrb            w0, [x3]
++        cbnz            w0, 3f
++        ldrb            w0, [x3, #1]
++        cbnz            w0, 3f
++        ldrb            w0, [x3, #2]
++        cmp             w0, #1
++        beq             22f                      // found 00 00 01
++3:      add             x3, x3, #1
++        cmp             x2, x3
++        ccmp            x7, x3, #0, hi
++        bhi             1b
++
++2:      sub             x0, x7, x3               // remaining = end - p
++        cmp             x0, #63
++        bgt             43f                      // enter NEON phase if >= 64 bytes
++
++        // Phase 3: byte-by-byte check for remaining data
++4:      cmp             x7, x3
++        bls             8f
++5:      ldrb            w0, [x3]
++        cbnz            w0, 6f
++        ldrb            w0, [x3, #1]
++        cbnz            w0, 6f
++        ldrb            w0, [x3, #2]
++        cmp             w0, #1
++        beq             22f
++6:      add             x3, x3, #1
++        cmp             x7, x3
++        bne             5b
++8:      mov             x0, x1                   // return orig_end
++        ret
++
++        // Phase 2: NEON acceleration (64-byte blocks)
++43:     sub             x8, x1, #66              // end64 = end - 66
++        cmp             x8, x3
++        bls             4b
++        mov             w6, #65279               // 0xFEFF
++        add             x5, x3, #64              // chunk_end = p + 64
++        movk            w6, #0xfefe, lsl #16     // 0xFEFEFEFF
++        b               10f
++
++9:      add             x3, x3, #64              // p += 64
++        add             x5, x5, #64              // chunk_end += 64
++        cmp             x8, x3
++        bls             4b
++
++10:     // Load 64 bytes (4x16-byte vectors)
++        ldp             q31, q30, [x3]           // load first 32 bytes
++        ldp             q29, q28, [x3, #32]      // load next 32 bytes
++        prfm            PLDL1KEEP, [x3, #192]    // prefetch
++
++        // Check for zero bytes (data == 0)
++        cmeq            v31.16b, v31.16b, #0     // z0
++        cmeq            v30.16b, v30.16b, #0     // z1
++        cmeq            v29.16b, v29.16b, #0     // z2
++        cmeq            v28.16b, v28.16b, #0     // z3
++
++        // Any zero is a candidate, including pairs across vector boundaries.
++        orr             v27.16b, v31.16b, v30.16b
++        orr             v25.16b, v29.16b, v28.16b
++        orr             v25.16b, v25.16b, v27.16b
++        dup             d31, v25.d[1]
++        orr             v31.8b, v31.8b, v25.8b
++        fmov            x0, d31
++        cbz             x0, 9b                   // no zero, skip to next chunk
++
++        // Detailed check of this 64-byte chunk
++        mov             x0, x3
++11:     ldr             w2, [x0]
++        add             w4, w2, w6               // x - 0x01010101
++        bic             w2, w4, w2               // (~x) & (x - 0x01010101)
++        tst             w2, #-2139062144         // & 0x80808080
++        beq             12f
++
++        ldrb            w2, [x0, #1]
++        cbnz            w2, 13f
++        ldrb            w4, [x0]
++        ldrb            w2, [x0, #2]
++        cbnz            w4, 14f
++        cmp             w2, #1
++        beq             18f                      // found 00 00 01
++14:     ldrb            w4, [x0, #3]
++        cbnz            w2, 15f
++        cmp             w4, #1
++        beq             44f                      // found 00 00 01 (offset +1)
++        cbnz            w4, 12f
++16:     ldrb            w2, [x0, #4]
++        cmp             w2, #1
++        beq             45f                      // found 00 00 01 (offset +2)
++17:     cbnz            w2, 12f
++        ldrb            w2, [x0, #5]
++        cmp             w2, #1
++        beq             46f                      // found 00 00 01 (offset +3)
++
++12:     add             x0, x0, #4
++        cmp             x0, x5
++        bne             11b
++        b               9b
++
++13:     ldrb            w2, [x0, #3]
++        cbnz            w2, 12b
++        ldrb            w2, [x0, #2]
++        cbz             w2, 16b
++        ldrb            w2, [x0, #4]
++        b               17b
++
++15:     cbnz            w4, 12b
++        ldrb            w2, [x0, #4]
++        b               17b
++
++22:     mov             x0, x3
++        ret
++
++45:     add             x0, x0, #2
++        ret
++
++44:     add             x0, x0, #1
++        ret
++
++46:     add             x0, x0, #3
++        ret
++
++18:     ret
++endfunc
+diff --git a/libavutil/nal.c b/libavutil/nal.c
+new file mode 100644
+index 0000000..d6e360a
+--- /dev/null
++++ b/libavutil/nal.c
+@@ -0,0 +1,93 @@
++/*
++ * NAL utility functions
++ *
++ * This file is part of FFmpeg.
++ *
++ * FFmpeg is free software; you can redistribute it and/or
++ * modify it under the terms of the GNU Lesser General Public
++ * License as published by the Free Software Foundation; either
++ * version 2.1 of the License, or (at your option) any later version.
++ *
++ * FFmpeg is distributed in the hope that it will be useful,
++ * but WITHOUT ANY WARRANTY; without even the implied warranty of
++ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
++ * GNU Lesser General Public License for more details.
++ *
++ * You should have received a copy of the GNU Lesser General Public License along
++ * with FFmpeg; if not, write to the Free Software Foundation, Inc.,
++ * 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA
++ */
++
++#include <stdint.h>
++#include <string.h>
++
++#include "config.h"
++#include "attributes.h"
++#include "cpu.h"
++#include "thread.h"
++#if ARCH_AARCH64 && HAVE_NEON
++#include "aarch64/cpu.h"
++#endif
++#include "nal.h"
++
++const uint8_t *ff_nal_find_startcode_c(const uint8_t *p, const uint8_t *end);
++
++#if ARCH_AARCH64 && HAVE_NEON
++const uint8_t *ff_nal_find_startcode_neon(const uint8_t *p, const uint8_t *end);
++#endif
++
++const uint8_t *ff_nal_find_startcode_c(const uint8_t *p, const uint8_t *end)
++{
++    while (end - p >= 3 && ((uintptr_t)p & 3)) {
++        if (!p[0] && !p[1] && p[2] == 1)
++            return p;
++        p++;
++    }
++
++    for (; end - p >= 6; p += 4) {
++        uint32_t x = *(const uint32_t *)p;
++        if ((x - 0x01010101U) & ~x & 0x80808080U) {
++            for (int i = 0; i < 4; i++)
++                if (!p[i] && !p[i + 1] && p[i + 2] == 1)
++                    return p + i;
++        }
++    }
++    for (; end - p >= 3; p++) {
++        if (!p[0] && !p[1] && p[2] == 1)
++            return p;
++    }
++    return end;
++}
++
++// Function pointer to the active implementation
++static const uint8_t *(*nal_find_startcode_func)(const uint8_t *p, const uint8_t *end);
++
++// Thread-safe initialization using ff_thread_once
++static AVOnce nal_func_init_once = AV_ONCE_INIT;
++
++static void nal_find_startcode_init(void)
++{
++#if ARCH_AARCH64 && HAVE_NEON
++    int cpu_flags = av_get_cpu_flags();
++    if (have_neon(cpu_flags))
++        nal_find_startcode_func = ff_nal_find_startcode_neon;
++    else
++        nal_find_startcode_func = ff_nal_find_startcode_c;
++#else
++    nal_find_startcode_func = ff_nal_find_startcode_c;
++#endif
++}
++
++const uint8_t *av_nal_find_startcode(const uint8_t *p, const uint8_t *end)
++{
++    // Initialize function pointer on first call (thread-safe)
++    ff_thread_once(&nal_func_init_once, nal_find_startcode_init);
++
++    // Call the optimized implementation
++    const uint8_t *start = p;
++    p = nal_find_startcode_func(p, end);
++
++    if (start < p && p < end && !p[-1])
++        p--;
++    return p;
++}
+diff --git a/libavutil/nal.h b/libavutil/nal.h
+new file mode 100644
+index 0000000..fd31adf
+--- /dev/null
++++ b/libavutil/nal.h
+@@ -0,0 +1,54 @@
++/*
++ * This file is part of FFmpeg.
++ *
++ * FFmpeg is free software; you can redistribute it and/or
++ * modify it under the terms of the GNU Lesser General Public
++ * License as published by the Free Software Foundation; either
++ * version 2.1 of the License, or (at your option) any later version.
++ *
++ * FFmpeg is distributed in the hope that it will be useful,
++ * but WITHOUT ANY WARRANTY; without even the implied warranty of
++ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
++ * GNU Lesser General Public License for more details.
++ *
++ * You should have received a copy of the GNU Lesser General Public License along
++ * with FFmpeg; if not, write to the Free Software Foundation, Inc.,
++ * 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA
++ */
++
++#ifndef AVUTIL_NAL_H
++#define AVUTIL_NAL_H
++
++#include <stdint.h>
++
++/**
++ * @file
++ * @ingroup lavu_misc
++ * NAL (Network Abstraction Layer) utility functions
++ */
++
++/**
++ * @addtogroup lavu_misc
++ * @{
++ */
++
++/**
++ * Find a H.264/H.265 NAL startcode (00 00 01 or 00 00 00 01) in a buffer.
++ *
++ * @param p    Pointer to start searching from
++ * @param end  Pointer to end of buffer (exclusive; no padding required)
++ * @return     Pointer to startcode, or end if not found
++ *
++ * @note This function searches for the pattern 00 00 01 (three-byte startcode)
++ *       or 00 00 00 01 (four-byte startcode). When found, it returns a pointer
++ *       to the startcode. If the byte before the startcode is also 0, it returns
++ *       that position instead (to handle the four-byte case).
++ *       If no startcode is found, returns end.
++ */
++const uint8_t *av_nal_find_startcode(const uint8_t *p, const uint8_t *end);
++
++/**
++ * @}
++ */
++
++#endif /* AVUTIL_NAL_H */
+diff --git a/libavutil/version.h b/libavutil/version.h
+index de614c9..ed6abea 100644
+--- a/libavutil/version.h
++++ b/libavutil/version.h
+@@ -79,7 +79,7 @@
+  */
+ 
+ #define LIBAVUTIL_VERSION_MAJOR  61
+-#define LIBAVUTIL_VERSION_MINOR  13
++#define LIBAVUTIL_VERSION_MINOR  14
+ #define LIBAVUTIL_VERSION_MICRO 100
+ 
+ #define LIBAVUTIL_VERSION_INT   AV_VERSION_INT(LIBAVUTIL_VERSION_MAJOR, \

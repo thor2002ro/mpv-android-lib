@@ -1,0 +1,80 @@
+Subject: [PATCH] swscale/aarch64: align unscaled RGB slices to source chroma
+
+Upstream proposal: https://code.ffmpeg.org/FFmpeg/FFmpeg/pulls/24880
+Patchwork: https://patchwork.ffmpeg.org/project/ffmpeg/patch/61059/
+Includes the upstream threaded conversion FATE regression test.
+
+diff --git a/libswscale/aarch64/swscale_unscaled.c b/libswscale/aarch64/swscale_unscaled.c
+index c9041db99f..d11625dbbb 100644
+--- a/libswscale/aarch64/swscale_unscaled.c
++++ b/libswscale/aarch64/swscale_unscaled.c
+@@ -146,8 +146,10 @@ static int nv24_to_yuv420p_neon_wrapper(SwsInternal *c, const uint8_t *const src
+         && c->opts.dst_format == AV_PIX_FMT_##OFMT                                          \
+         && !(c->opts.src_h & 1)                                                             \
+         && !(c->opts.src_w & 15)                                                            \
+-        && !accurate_rnd)                                                                   \
++        && !accurate_rnd) {                                                                 \
+         c->convert_unscaled = ifmt##_to_##ofmt##_neon_wrapper;                              \
++        c->dst_slice_align = FFMAX(c->dst_slice_align, 1 << c->chrSrcVSubSample);            \
++    }                                                                                     \
+ } while (0)
+ 
+ #define SET_FF_YUVX_TO_ALL_RGBX_FUNC(yuvx, YUVX, accurate_rnd) do {                         \
+diff --git a/libswscale/aarch64/yuv2rgb_neon.S b/libswscale/aarch64/yuv2rgb_neon.S
+index 734b6dd174..de5c5ce70a 100644
+--- a/libswscale/aarch64/yuv2rgb_neon.S
++++ b/libswscale/aarch64/yuv2rgb_neon.S
+@@ -941,10 +941,9 @@ endfunc
+ // share one chroma row, so the chroma -> RGB offsets (v20-v25) are
+ // computed once and applied to both luma rows.
+ //
+-// Precondition: slice height is even. SET_FF_YUVX_TO_RGBX_FUNC gates
+-// on !(src_h & 1); scale_internal()'s macro_height_src check in
+-// libswscale/swscale.c rejects any odd srcSliceH for vertically-
+-// subsampled sources (chrSrcVSubSample > 0).
++// Precondition: slice height is even. SET_FF_YUVX_TO_RGBX_FUNC checks
++// the frame height and sets dst_slice_align for threaded conversion.
++// scale_internal() also rejects odd input slices for subsampled sources.
+ .macro declare_2l_packed ifmt ofmt
+ function ff_\ifmt\()_to_\ofmt\()_neon, export=1
+         uxtw            widthx, width
+-- 
+2.52.0
+>From 25447598a2ab0e6ab71c57621a2c9c9cae4c3140 Mon Sep 17 00:00:00 2001
+From: Michael Niedermayer <michael@niedermayer.cc>
+Date: Sun, 4 Oct 2026 15:41:59 +0000
+Subject: [PATCH 2/2] tests/swscale: compare unscaled conversion across thread
+ counts
+Compare one-thread conversion with 2, 3, 7 and 16 threads for five even
+frame heights, including cases that otherwise produce odd slices. Cover
+NV12, NV21, YUV420P, YUVA420P and YUV422P to packed and planar RGB,
+including both byte orders of the 16-bit formats.
+Exercise both dynamic and initialized legacy swscale contexts. Disable
+dithering so the AArch64 selector must supply its own slice alignment
+for planar inputs as well. Compare within each implementation to avoid
+requiring identical color conversion rounding across architectures.
+Print mismatching row counts for FATE to compare with its reference.
+The test fails before the preceding fix on native AArch64 and passes
+afterwards. It also passes on native x86-64.
+Assisted-by: Fairy
+---
+ libswscale/Makefile                  |   1 +
+ libswscale/tests/.gitignore          |   1 +
+ libswscale/tests/unscaled_threaded.c | 148 +++++++++++++++++++++++++++
+ tests/fate/libswscale.mak            |   4 +
+ tests/ref/fate/sws-unscaled-threaded |  75 ++++++++++++++
+ 5 files changed, 229 insertions(+)
+ create mode 100644 libswscale/tests/unscaled_threaded.c
+ create mode 100644 tests/ref/fate/sws-unscaled-threaded
+diff --git a/libswscale/Makefile b/libswscale/Makefile
+index f6dbed3c08..4c12c888c6 100644
+--- a/libswscale/Makefile
++++ b/libswscale/Makefile
+@@ -53,6 +53,7 @@ TESTPROGS = colorspace                                                  \
+             floatimg_cmp                                                \
+             pixdesc_query                                               \
+             swscale                                                     \
++            unscaled_threaded                                           \
+ 
+ TESTPROGS-$(CONFIG_UNSTABLE) = sws_ops                                  \
+                                sws_ops_aarch64                          \
