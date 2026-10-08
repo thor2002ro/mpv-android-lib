@@ -58,6 +58,45 @@ Decoder lookup uses that Dolby Vision profile rather than the HEVC base-layer
 profile. Unsupported Dolby Vision configurations fail instead of silently
 opening an HDR10 decoder.
 
+Local FFmpeg patches also forward Android color/HDR metadata and stop a
+MediaCodec input/output busy loop after five seconds without progress. The
+existing Dolby Vision profile is preserved. The MediaCodec buffer and HEVC
+cleanup fixes from upstream PR #22550 are already in master.
+
+ARM64 builds include the experimental [NEON JIT scaler proposal #23923](https://code.ffmpeg.org/FFmpeg/FFmpeg/pulls/23923)
+with LLVM 21.1.8. Building it requires CMake 3.20 or newer and a host C++
+compiler. LLVM assembler components are linked into libswscale; the existing
+shared Android C++ runtime is required. Other ABIs do not build LLVM.
+
+The JIT backend retains upstream runtime opt-in. A caller using the modern
+`sws_scale_frame` API can allow it with `sws_backends=stable+aarch64_jit` on
+ARM64 (or `SWS_UNSTABLE`); unsupported operations fall back to another allowed
+backend.
+MPV's current `sws_scale` path and this library's thumbnail code use the legacy
+API and do not enter the JIT backend. Hardware decoding also bypasses this CPU
+scaler. Enabling it for those callers requires a separate API migration and
+playback/performance validation on the target ABI.
+
+Additional ARM64 patches align threaded YUV-to-RGB slices to source chroma
+(PR #24880), accelerate NAL start-code scanning with NEON (PR #21475), and
+provide an explicit 10-bit VVC ALF gradient entry and the two-block classifier
+(PR #24925). The NAL port preserves bounded reads and handles start codes at
+buffer and vector boundaries. VVC decoding is already enabled; unsupported
+ALF block dimensions retain the generic classifier.
+
+ARMv7 builds use runtime-dispatched NEON NAL scanning, with the bounded C
+scanner handling short buffers and candidate blocks. Clang also vectorizes
+the existing 8-bit VVC ALF gradient loop; 10/12-bit processing and exact
+64-bit direction decisions retain the compiler's existing implementation.
+The ARMv7 YUV-to-RGB selector now supplies chroma-aligned slices and works
+with the NDK integrated assembler; GNU-specific RGB-to-YUV routines retain
+their existing assembler check. Conversion wrappers return the processed row
+count, as required by the scaler API.
+
+Focused checks (MediaCodec metadata requires a configured native-host
+FFmpeg source tree with libavutil built):
+
+
 If you've made changes to a single component (e.g. ffmpeg or mpv) and want a new build you can of course just run ./buildall.sh but it's also possible to just build a single component like this:
 
 ```sh

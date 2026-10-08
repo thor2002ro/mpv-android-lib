@@ -90,6 +90,11 @@ while read -r prefix_name android_abi build_suffix; do
         echo "Missing required FFmpeg AC3 encoder for $android_abi" >&2
         exit 1
     }
+    grep -Eq '^#define[[:space:]]+CONFIG_AUDIO_FRAME_QUEUE[[:space:]]+1$' \
+        "$ffmpeg_repository/_build$build_suffix/config.h" || {
+        echo "Missing required FFmpeg AC3 audio frame queue for $android_abi" >&2
+        exit 1
+    }
 
     for library in "${ffmpeg_libraries[@]}"; do
         source_library="$wrapper_abi/$library"
@@ -99,13 +104,22 @@ while read -r prefix_name android_abi build_suffix; do
         }
         mv -- "$source_library" "$provider_abi/$library"
     done
-    cp -R -- "$prefix/include/." "$provider_headers/"
+    for library in "${ffmpeg_libraries[@]}"; do
+        cp -R -- "$prefix/include/${library%.so}" "$provider_headers/"
+    done
 done <<'EOF'
 armv7l armeabi-v7a
 arm64 arm64-v8a -arm64
 x86 x86 -x86
 x86_64 x86_64 -x64
 EOF
+
+llvm_license="$repository_root/buildscripts/deps/llvm/llvm/LICENSE.TXT"
+[[ -f "$llvm_license" ]] || {
+    echo "LLVM license is missing: $llvm_license" >&2
+    exit 1
+}
+cp -- "$llvm_license" "$provider_main/generated/META-INF/LLVM-LICENSE.txt"
 
 decoders_csv="$(IFS=,; echo "${media3_decoders[*]}")"
 metadata="$provider_main/generated/META-INF/mpv-ffmpeg-android.properties"
@@ -221,12 +235,14 @@ EOF
                 "$abi_root/include/$header_directory/avconfig.h"
         fi
         cp -- "$provider_main/jniLibs/$android_abi/$library" "$abi_root/$library"
+        stl=none
+        [[ "$module" == swscale && "$android_abi" == arm64-v8a ]] && stl=c++_shared
         cat > "$abi_root/abi.json" <<EOF
 {
   "abi": "$android_abi",
   "api": 24,
   "ndk": 29,
-  "stl": "none",
+  "stl": "$stl",
   "static": false
 }
 EOF

@@ -20,13 +20,15 @@ v_libxml2=2.15.4
 v_fontconfig=2.18.3
 v_ffmpeg=master
 v_libplacebo=master
+v_llvm=21.1.8
 ## Dependency tree
 # I would've used a dict but putting arrays in a dict is not a thing
 
 dep_libressl=()
 dep_libxml2=()
 dep_dav1d=()
-dep_ffmpeg=(libressl dav1d libxml2)
+dep_llvm=()
+dep_ffmpeg=(libressl dav1d libxml2 llvm)
 dep_freetype2=()
 dep_fontconfig=(libxml2 freetype2)
 dep_fribidi=()

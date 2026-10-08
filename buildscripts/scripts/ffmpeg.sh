@@ -25,10 +25,13 @@ cpuflags=
 architecture_args=()
 [[ "$ndk_triple" == "arm"* || "$ndk_triple" == "aarch64"* ]] && architecture_args+=(--enable-neon)
 [[ "$ndk_triple" == "arm"* ]] && architecture_args+=(--enable-thumb)
+if [[ "$ndk_triple" == "aarch64"* ]]; then
+	architecture_args+=(--enable-llvm --enable-unstable --llvm-config="$prefix_dir/bin/llvm-config")
+fi
 
 args=(
 	--target-os=android --enable-cross-compile
-	--cross-prefix=$ndk_triple- --cc=$CC --host-cc=clang --pkg-config=pkg-config --pkg-config-flags=--static --nm=llvm-nm
+	--cross-prefix=$ndk_triple- --cc=$CC --cxx=$CXX --host-cc=clang --pkg-config=pkg-config --pkg-config-flags=--static --nm=llvm-nm
 	--arch=${ndk_triple%%-*} --cpu=$cpu
 	--extra-cflags="-I$prefix_dir/include $cpuflags" --extra-ldflags="-L$prefix_dir/lib"
 	--optflags=-O3 --enable-lto

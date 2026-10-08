@@ -24,6 +24,13 @@ fi
 # dav1d
 [ ! -d dav1d ] && git clone --depth 1 https://github.com/videolan/dav1d
 
+# LLVM's assembler runs on the Android target, independently of the NDK compiler.
+if [ ! -d llvm ]; then
+	mkdir llvm
+	$WGET https://github.com/llvm/llvm-project/releases/download/llvmorg-$v_llvm/llvm-project-$v_llvm.src.tar.xz -O - | \
+		tar -xJ -C llvm --strip-components=1
+fi
+
 # ffmpeg
 if [ ! -d ffmpeg ]; then
     git clone --branch "$v_ffmpeg" --depth 1 https://github.com/FFmpeg/FFmpeg ffmpeg
