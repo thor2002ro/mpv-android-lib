@@ -1,4 +1,5 @@
 #include <stdlib.h>
+#include <limits.h>
 #include <string>
 
 #include <jni.h>
@@ -7,6 +8,9 @@
 
 extern "C" {
     #include <libswscale/swscale.h>
+    #include <libavutil/frame.h>
+    #include <libavutil/opt.h>
+    #include <libavutil/error.h>
 };
 
 #include "jni_utils.h"
@@ -26,9 +30,61 @@ static inline mpv_node make_node_str(const char *s)
     return r;
 }
 
+static int scale_thumbnail(const uint8_t *pixels, int width, int height, int stride,
+                           uint8_t *output, int dimension)
+{
+    SwsContext *sws = sws_alloc_context();
+    AVFrame *src = av_frame_alloc(), *dst = av_frame_alloc();
+    if (!sws || !src || !dst) {
+        sws_freeContext(sws);
+        av_frame_free(&src);
+        av_frame_free(&dst);
+        return AVERROR(ENOMEM);
+    }
+    src->format = AV_PIX_FMT_BGR0;
+    src->width = width;
+    src->height = height;
+    src->data[0] = const_cast<uint8_t *>(pixels);
+    src->linesize[0] = stride;
+    dst->format = AV_PIX_FMT_RGB32;
+    dst->width = dst->height = dimension;
+    dst->data[0] = output;
+    dst->linesize[0] = dimension * sizeof(jint);
+    src->colorspace = dst->colorspace = AVCOL_SPC_RGB;
+    src->color_range = dst->color_range = AVCOL_RANGE_JPEG;
+    int ret = av_opt_set_int(sws, "sws_flags", SWS_BICUBIC, 0);
+    if (ret >= 0)
+        ret = av_opt_set(sws, "sws_backends", "stable", 0);
+    if (ret >= 0) {
+        // JIT only covers same-size conversions; keep resizing on stable backends.
+        if (width == dimension && height == dimension &&
+            av_opt_set(sws, "sws_backends", "stable+arm_jit+aarch64_jit", 0) >= 0)
+            av_opt_set_int(sws, "sws_flags", SWS_BICUBIC | SWS_UNSTABLE, 0);
+        ret = sws_scale_frame(sws, dst, src);
+    }
+    sws_freeContext(sws);
+    if (ret < 0) {
+        sws = sws_getContext(width, height, AV_PIX_FMT_BGR0, dimension, dimension,
+                             AV_PIX_FMT_RGB32, SWS_BICUBIC, NULL, NULL, NULL);
+        if (sws) {
+            const uint8_t *in[4] = {pixels};
+            ret = sws_scale(sws, in, src->linesize, 0, height, dst->data, dst->linesize);
+            ret = ret == dimension ? 0 : AVERROR_EXTERNAL;
+            sws_freeContext(sws);
+        }
+    }
+    av_frame_free(&src);
+    av_frame_free(&dst);
+    return ret;
+}
+
 jni_func(jobject, grabThumbnail, jint dimension) {
     MpvContext *ctx = get_context(env, obj);
     CHECK_CTX(ctx);
+    if (dimension <= 0 || dimension > INT_MAX / dimension) {
+        ALOGE("invalid thumbnail dimension");
+        return NULL;
+    }
 
     mpv_node result{};
     {
@@ -47,7 +103,7 @@ jni_func(jobject, grabThumbnail, jint dimension) {
     }
 
     // extract relevant property data from the node map mpv returns
-    int w = 0, h = 0, stride = 0;
+    int64_t w = 0, h = 0, stride = 0;
     bool format_ok = false;
     struct mpv_byte_array *data = NULL;
     do {
@@ -76,12 +132,14 @@ jni_func(jobject, grabThumbnail, jint dimension) {
             }
         }
     } while (0);
-    if (!w || !h || !stride || !format_ok || !data) {
+    if (w <= 0 || h <= 0 || stride <= 0 || w > INT_MAX || h > INT_MAX ||
+        stride > INT_MAX || stride < w * sizeof(uint32_t) || !format_ok || !data ||
+        !data->data || data->size < (uint64_t)(h - 1) * stride + w * sizeof(uint32_t)) {
         ALOGE("extracting data failed");
         mpv_free_node_contents(&result);
         return NULL;
     }
-    ALOGV("screenshot w:%d h:%d stride:%d", w, h, stride);
+    ALOGV("screenshot w:%d h:%d stride:%d", (int)w, (int)h, (int)stride);
 
     // crop to square
     int crop_left = 0, crop_top = 0;
@@ -99,26 +157,27 @@ jni_func(jobject, grabThumbnail, jint dimension) {
     new_data += crop_left * sizeof(uint32_t); // move begin rightwards
     new_data += stride * crop_top; // move begin downwards
 
-    // convert & scale to appropriate size
-    struct SwsContext *sws_ctx = sws_getContext(
-        new_w, new_h, AV_PIX_FMT_BGR0,
-        dimension, dimension, AV_PIX_FMT_RGB32,
-        SWS_BICUBIC, NULL, NULL, NULL);
-    if (!sws_ctx) {
+    jintArray arr = env->NewIntArray(dimension * dimension);
+    if (!arr) {
         mpv_free_node_contents(&result);
         return NULL;
     }
-
-    jintArray arr = env->NewIntArray(dimension * dimension);
     jint *scaled = env->GetIntArrayElements(arr, NULL);
-
-    uint8_t *src_p[4] = { new_data }, *dst_p[4] = { (uint8_t*) scaled };
-    int src_stride[4] = { stride },
-        dst_stride[4] = { (int) sizeof(jint) * dimension };
-    sws_scale(sws_ctx, src_p, src_stride, 0, new_h, dst_p, dst_stride);
-    sws_freeContext(sws_ctx);
+    if (!scaled) {
+        mpv_free_node_contents(&result);
+        env->DeleteLocalRef(arr);
+        return NULL;
+    }
+    int ret = scale_thumbnail(new_data, new_w, new_h, stride,
+                              reinterpret_cast<uint8_t *>(scaled), dimension);
 
     mpv_free_node_contents(&result); // frees data->data
+    if (ret < 0) {
+        ALOGE("thumbnail conversion failed: %d", ret);
+        env->ReleaseIntArrayElements(arr, scaled, JNI_ABORT);
+        env->DeleteLocalRef(arr);
+        return NULL;
+    }
 
     // create android.graphics.Bitmap
     env->ReleaseIntArrayElements(arr, scaled, 0);

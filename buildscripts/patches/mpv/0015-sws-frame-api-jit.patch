@@ -1,0 +1,144 @@
+Subject: [PATCH] swscale: use frame API for compatible RGB JIT conversions
+
+Based on mpv 36abaa32d00a7229ee206aae12dc0e97e7962dca.
+Keep legacy resizing, color conversion and custom filters. Cache the frame
+context and allow stable backends plus the patched ARM JIT implementations.
+Borrow caller buffers and fall back to the initialized legacy context on
+frame conversion failure.
+
+diff --git a/video/sws_utils.c b/video/sws_utils.c
+index 7966c97..b8d08e0 100644
+--- a/video/sws_utils.c
++++ b/video/sws_utils.c
+@@ -179,6 +179,7 @@ static void free_mp_sws(void *p)
+ {
+     struct mp_sws_context *ctx = p;
+     sws_freeContext(ctx->sws);
++    sws_freeContext(ctx->sws_frame);
+     sws_freeFilter(ctx->src_filter);
+     sws_freeFilter(ctx->dst_filter);
+     TA_FREEP(&ctx->aligned_src);
+@@ -227,6 +228,53 @@ void mp_sws_enable_cmdline_opts(struct mp_sws_context *ctx, struct mpv_global *g
+ #endif
+ }
+
++static bool identity_filter(const SwsFilter *filter)
++{
++    if (!filter)
++        return true;
++    const SwsVector *vectors[] = {filter->lumH, filter->lumV, filter->chrH, filter->chrV};
++    for (int i = 0; i < MP_ARRAY_SIZE(vectors); i++) {
++        const SwsVector *v = vectors[i];
++        if (v && (v->length != 1 || v->coeff[0] != 1.0))
++            return false;
++    }
++    return true;
++}
++
++static bool rgb8_format(enum AVPixelFormat format)
++{
++    const AVPixFmtDescriptor *desc = av_pix_fmt_desc_get(format);
++    if (!desc || !(desc->flags & AV_PIX_FMT_FLAG_RGB) ||
++        (desc->flags & (AV_PIX_FMT_FLAG_PAL | AV_PIX_FMT_FLAG_BITSTREAM |
++                       AV_PIX_FMT_FLAG_HWACCEL | AV_PIX_FMT_FLAG_BAYER)))
++        return false;
++    for (int i = 0; i < desc->nb_components; i++) {
++        if (desc->comp[i].depth != 8)
++            return false;
++    }
++    return true;
++}
++
++static AVFrame *sws_frame_view(struct mp_image *img)
++{
++    AVFrame *frame = av_frame_alloc();
++    if (!frame)
++        return NULL;
++    frame->format = imgfmt2pixfmt(img->imgfmt);
++    frame->width = img->w;
++    frame->height = img->h;
++    for (int i = 0; i < 4; i++) {
++        frame->data[i] = img->planes[i];
++        frame->linesize[i] = img->stride[i];
++    }
++    struct mp_image_params params = img->params;
++    mp_image_params_guess_csp(&params);
++    pl_avframe_set_repr(frame, params.repr);
++    pl_avframe_set_color(frame, params.color);
++    frame->chroma_location = pl_chroma_to_av(params.chroma_location);
++    return frame;
++}
++
+ // Reinitialize (if needed) - return error code.
+ // Optional, but possibly useful to avoid having to handle mp_sws_scale errors.
+ int mp_sws_reinit(struct mp_sws_context *ctx)
+@@ -242,6 +290,8 @@ int mp_sws_reinit(struct mp_sws_context *ctx)
+
+     sws_freeContext(ctx->sws);
+     ctx->sws = NULL;
++    sws_freeContext(ctx->sws_frame);
++    ctx->sws_frame = NULL;
+     ctx->zimg_ok = false;
+     TA_FREEP(&ctx->aligned_src);
+     TA_FREEP(&ctx->aligned_dst);
+@@ -330,6 +380,20 @@ int mp_sws_reinit(struct mp_sws_context *ctx)
+     if (sws_init_context(ctx->sws, ctx->src_filter, ctx->dst_filter) < 0)
+         return -1;
+
++    // Keep legacy color transforms, resizing and custom filters unchanged.
++    if (src.w == dst.w && src.h == dst.h && rgb8_format(s_fmt) && rgb8_format(d_fmt) &&
++        pl_color_repr_equal(&src.repr, &dst.repr) &&
++        pl_color_space_equal(&src.color, &dst.color) &&
++        identity_filter(ctx->src_filter) && identity_filter(ctx->dst_filter)) {
++        ctx->sws_frame = sws_alloc_context();
++        if (ctx->sws_frame &&
++            (av_opt_set(ctx->sws_frame, "sws_backends", "stable+arm_jit+aarch64_jit", 0) < 0 ||
++             av_opt_set_int(ctx->sws_frame, "sws_flags", ctx->flags | SWS_UNSTABLE, 0) < 0)) {
++            sws_freeContext(ctx->sws_frame);
++            ctx->sws_frame = NULL;
++        }
++    }
++
+ #if HAVE_ZIMG
+ success:
+ #endif
+@@ -415,8 +479,25 @@ int mp_sws_scale(struct mp_sws_context *ctx, struct mp_image *dst,
+     if (a_src != src)
+         mp_image_copy(a_src, src);
+
+-    sws_scale(ctx->sws, (const uint8_t *const *) a_src->planes, a_src->stride,
+-              0, a_src->h, a_dst->planes, a_dst->stride);
++    int converted = -1;
++    if (ctx->sws_frame) {
++        // Borrow buffers: mp_image_to_av_frame copies non-reference-counted outputs.
++        AVFrame *in = sws_frame_view(a_src);
++        AVFrame *out = sws_frame_view(a_dst);
++        if (in && out)
++            converted = sws_scale_frame(ctx->sws_frame, out, in);
++        av_frame_free(&in);
++        av_frame_free(&out);
++        if (converted < 0) {
++            MP_VERBOSE(ctx, "Frame scaler unavailable; using legacy conversion.\n");
++            sws_freeContext(ctx->sws_frame);
++            ctx->sws_frame = NULL;
++        }
++    }
++    if (converted < 0 &&
++        sws_scale(ctx->sws, (const uint8_t *const *) a_src->planes, a_src->stride,
++                  0, a_src->h, a_dst->planes, a_dst->stride) != a_dst->h)
++        return -1;
+
+     if (a_dst != dst)
+         mp_image_copy(dst, a_dst);
+diff --git a/video/sws_utils.h b/video/sws_utils.h
+index 8c08265..f5a268e 100644
+--- a/video/sws_utils.h
++++ b/video/sws_utils.h
+@@ -53,6 +53,7 @@ struct mp_sws_context {
+
+     // Cached context (if any)
+     struct SwsContext *sws;
++    struct SwsContext *sws_frame;
+     bool supports_csp;
+
+     // Private.

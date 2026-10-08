@@ -84,6 +84,6 @@ LOCAL_SRC_FILES := \
 	mpv_context.cpp
 LOCAL_LDLIBS    := -llog -latomic
 LOCAL_LDFLAGS   := -flto=thin -Wl,-z,max-page-size=16384
-LOCAL_SHARED_LIBRARIES := swscale avcodec mpv
+LOCAL_SHARED_LIBRARIES := swscale avcodec avutil mpv
 
 include $(BUILD_SHARED_LIBRARY)
