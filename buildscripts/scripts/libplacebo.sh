@@ -24,6 +24,7 @@ case "$ndk_triple" in
 esac
 
 "$DIR/sdk/android-ndk-${v_ndk}/ndk-build" \
+	-j"$cores" \
 	-C "$DIR/sdk/android-ndk-${v_ndk}/sources/third_party/shaderc" \
 	NDK_PROJECT_PATH=. APP_BUILD_SCRIPT=Android.mk \
 	APP_ABI="$abi" APP_PLATFORM=android-24 APP_STL=c++_static \
