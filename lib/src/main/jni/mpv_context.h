@@ -4,8 +4,19 @@
 #include <mpv/client.h>
 #include <pthread.h>
 #include <atomic>
+#include "playback_worker.h"
+#include <string>
+
+struct CommandFailure {
+    std::string command;
+    int error;
+    int64_t request_id;
+};
 
 struct MpvContext {
+    PlaybackWorker playback;
+    std::mutex reply_mutex;
+    std::deque<CommandFailure> command_failures;
     mpv_handle *mpv;
     std::atomic<bool> event_thread_request_exit;
     pthread_t event_thread_id;

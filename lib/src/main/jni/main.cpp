@@ -4,6 +4,8 @@
 #include <time.h>
 #include <locale.h>
 #include <atomic>
+#include <string>
+#include <vector>
 
 #include <mpv/client.h>
 
@@ -19,14 +21,13 @@ extern "C" {
 #include "node.h"
 #include "mpv_context.h"
 
-#define ARRAYLEN(a) (sizeof(a)/sizeof(a[0]))
-
 extern "C" {
     jni_func(void, nativeCreate, jobject appctx);
     jni_func(void, nativeInit);
     jni_func(void, nativeDestroy);
 
     jni_func(void, command, jobjectArray jarray);
+    jni_func(jboolean, commandAsync, jlong request_id, jobjectArray jarray);
     jni_func(jobject, commandNode, jobjectArray jarray);
 };
 
@@ -97,6 +98,8 @@ jni_func(void, nativeDestroy) {
         return;
     }
 
+    // Drain playback work while the event consumer and handle are still alive.
+    ctx->playback.stop();
     // Stop the only thread waiting on the handle before MPV tears down its core.
     ctx->event_thread_request_exit = true;
     mpv_wakeup(ctx->mpv);
@@ -113,27 +116,43 @@ jni_func(void, nativeDestroy) {
     set_context(env, obj, nullptr);
 }
 
-jni_func(void, command, jobjectArray jarray) {
+static bool queue_command(JNIEnv *env, jobject obj, jobjectArray jarray, int64_t request_id) {
     MpvContext *ctx = get_context(env, obj);
     CHECK_CTX(ctx);
 
-    const char *arguments[128] = {0};
-    jstring jstrings[128] = {0};
     int len = env->GetArrayLength(jarray);
-    if (len >= ARRAYLEN(arguments))
-        die("too many command arguments");
-
+    if (len == 0 || len >= 128) return false;
+    std::vector<std::string> arguments;
     for (int i = 0; i < len; ++i) {
-        jstrings[i] = (jstring)env->GetObjectArrayElement(jarray, i);
-        arguments[i] = env->GetStringUTFChars(jstrings[i], NULL);
+        jstring str = (jstring)env->GetObjectArrayElement(jarray, i);
+        if (!str) return false;
+        const char *value = env->GetStringUTFChars(str, NULL);
+        if (!value) { env->DeleteLocalRef(str); return false; }
+        arguments.emplace_back(value);
+        env->ReleaseStringUTFChars(str, value);
+        env->DeleteLocalRef(str);
     }
+    return ctx->playback.post([ctx, arguments, request_id] {
+        std::vector<const char *> argv;
+        for (const auto &value : arguments) argv.push_back(value.c_str());
+        argv.push_back(NULL);
+        int error = mpv_command(ctx->mpv, argv.data());
+        if (error >= 0) return;
+        ALOGE("mpv_command(%s) returned error %s", argv[0], mpv_error_string(error));
+        {
+            std::lock_guard<std::mutex> lock(ctx->reply_mutex);
+            ctx->command_failures.push_back({arguments[0], error, request_id});
+        }
+        mpv_wakeup(ctx->mpv);
+    });
+}
 
-    mpv_command(ctx->mpv, arguments);
+jni_func(void, command, jobjectArray jarray) {
+    if (!queue_command(env, obj, jarray, 0)) ALOGE("Unable to queue MPV command");
+}
 
-    for (int i = 0; i < len; ++i) {
-        env->ReleaseStringUTFChars(jstrings[i], arguments[i]);
-        env->DeleteLocalRef(jstrings[i]);
-    }
+jni_func(jboolean, commandAsync, jlong request_id, jobjectArray jarray) {
+    return queue_command(env, obj, jarray, request_id) ? JNI_TRUE : JNI_FALSE;
 }
 
 jni_func(jobject, commandNode, jobjectArray jarray) {
@@ -161,7 +180,7 @@ jni_func(jobject, commandNode, jobjectArray jarray) {
     }
 
     mpv_node result;
-    int error = mpv_command_node(ctx->mpv, &args, &result);
+    int error = ctx->playback.run([&] { return mpv_command_node(ctx->mpv, &args, &result); });
 
     for (int i = 0; i < len; ++i) free(args.u.list->values[i].u.string);
     free(args.u.list->values);

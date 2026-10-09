@@ -35,13 +35,18 @@ class MPV(
     external fun attachSurface(surface: Surface)
     external fun detachSurface()
 
+    /** Queues a command without waiting for the playback core. */
     external fun command(vararg cmd: String)
+    /** Returns queue acceptance; failures carry command, error and request-id in COMMAND_REPLY. */
+    external fun commandAsync(requestId: Long, vararg cmd: String): Boolean
+    /** Waits for the actual command result, after previously queued writes. */
     external fun commandNode(vararg cmd: String): MPVNode?
 
     external fun setOptionString(name: String, value: String): Int
 
     external fun grabThumbnail(dimension: Int): Bitmap?
 
+    // Fresh getters wait for earlier writes; use observed flows for frequent UI reads.
     external fun getPropertyInt(property: String): Int?
     external fun setPropertyInt(property: String, value: Int)
     external fun getPropertyDouble(property: String): Double?
@@ -61,6 +66,13 @@ class MPV(
     fun setPropertyLong(property: String, value: Long) = setPropertyInt(property, value.toInt())
 
     external fun observeProperty(property: String, format: Int)
+
+    val cachedProperties = ObservedProperties()
+
+    fun observePlaybackProperties() {
+        observeProperty("demuxer-cache-state", mpvFormat.MPV_FORMAT_NODE)
+        playbackStatProperties.forEach { observeProperty(it, mpvFormat.MPV_FORMAT_STRING) }
+    }
 
     private var sessionScope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
 
@@ -87,6 +99,7 @@ class MPV(
         sessionScope.cancel()
         stateCache.clear()
         observedProperties.clear()
+        cachedProperties.clear()
     }
 
     private fun <T> getOrCreateState(
@@ -289,6 +302,7 @@ class MPV(
 
     @Suppress("unused")
     private fun eventProperty(property: String, value: Long) {
+        cachedProperties.update(property, value)
         synchronized(observers) {
             for (o in observers) o.eventProperty(property, value)
         }
@@ -300,6 +314,7 @@ class MPV(
 
     @Suppress("unused")
     private fun eventProperty(property: String, value: Boolean) {
+        cachedProperties.update(property, value)
         synchronized(observers) {
             for (o in observers) o.eventProperty(property, value)
         }
@@ -308,6 +323,7 @@ class MPV(
 
     @Suppress("unused")
     private fun eventProperty(property: String, value: Double) {
+        cachedProperties.update(property, value)
         synchronized(observers) {
             for (o in observers) o.eventProperty(property, value)
         }
@@ -319,6 +335,7 @@ class MPV(
 
     @Suppress("unused")
     private fun eventProperty(property: String, value: String) {
+        cachedProperties.update(property, value)
         synchronized(observers) {
             for (o in observers) o.eventProperty(property, value)
         }
@@ -327,6 +344,7 @@ class MPV(
 
     @Suppress("unused")
     private fun eventProperty(property: String, value: MPVNode) {
+        cachedProperties.update(property, value)
         synchronized(observers) {
             for (o in observers) o.eventProperty(property, value)
         }
@@ -335,6 +353,7 @@ class MPV(
 
     @Suppress("unused")
     private fun eventProperty(property: String) {
+        cachedProperties.update(property, null)
         synchronized(observers) {
             for (o in observers) o.eventProperty(property)
         }
@@ -423,7 +442,12 @@ class MPV(
 
     fun close() {
         destroySession()
-        nativeDestroy()
+        try {
+            nativeDestroy()
+        } finally {
+            // The event thread can still update the snapshot until nativeDestroy returns.
+            cachedProperties.clear()
+        }
     }
 
     fun setCacheDir(cacheDir: String) {

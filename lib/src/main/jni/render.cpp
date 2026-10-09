@@ -20,7 +20,7 @@ jni_func(void, attachSurface, jobject surface_) {
     if (!ctx->surface)
         die("invalid surface provided");
     int64_t wid = reinterpret_cast<intptr_t>(ctx->surface);
-    int result = mpv_set_option(ctx->mpv, "wid", MPV_FORMAT_INT64, &wid);
+    int result = ctx->playback.run([&] { return mpv_set_option(ctx->mpv, "wid", MPV_FORMAT_INT64, &wid); });
     if (result < 0)
          ALOGE("mpv_set_option(wid) returned error %s", mpv_error_string(result));
 }
@@ -30,7 +30,8 @@ jni_func(void, detachSurface) {
     CHECK_CTX(ctx);
 
     int64_t wid = 0;
-    int result = mpv_set_option(ctx->mpv, "wid", MPV_FORMAT_INT64, &wid);
+    // Flush queued vo=null before releasing the Java Surface reference.
+    int result = ctx->playback.run([&] { return mpv_set_option(ctx->mpv, "wid", MPV_FORMAT_INT64, &wid); });
     if (result < 0)
          ALOGE("mpv_set_option(wid) returned error %s", mpv_error_string(result));
 

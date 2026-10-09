@@ -96,7 +96,7 @@ jni_func(jobject, grabThumbnail, jint dimension) {
         c_array.values = c_args;
         c.format = MPV_FORMAT_NODE_ARRAY;
         c.u.list = &c_array;
-        if (mpv_command_node(ctx->mpv, &c, &result) < 0) {
+        if (ctx->playback.run([&] { return mpv_command_node(ctx->mpv, &c, &result); }) < 0) {
             ALOGE("screenshot-raw command failed");
             return NULL;
         }

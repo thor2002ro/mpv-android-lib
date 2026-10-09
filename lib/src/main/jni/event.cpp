@@ -85,6 +85,30 @@ static void sendLogMessageToJava(JNIEnv *env, jobject java_instance, mpv_event_l
         env->DeleteLocalRef(jtext);
 }
 
+static void sendCommandFailuresToJava(JNIEnv *env, MpvContext *ctx)
+{
+    std::deque<CommandFailure> failures;
+    {
+        std::lock_guard<std::mutex> lock(ctx->reply_mutex);
+        failures.swap(ctx->command_failures);
+    }
+    for (const auto &failure : failures) {
+        mpv_node values[3] = {};
+        values[0].format = values[1].format = MPV_FORMAT_STRING;
+        values[0].u.string = const_cast<char *>(failure.command.c_str());
+        values[1].u.string = const_cast<char *>(mpv_error_string(failure.error));
+        values[2].format = MPV_FORMAT_INT64;
+        values[2].u.int64 = failure.request_id;
+        char *keys[] = {const_cast<char *>("command"), const_cast<char *>("error"),
+                        const_cast<char *>("request-id")};
+        mpv_node_list list = {3, values, keys};
+        mpv_node data = {};
+        data.format = MPV_FORMAT_NODE_MAP;
+        data.u.list = &list;
+        sendEventToJava(env, ctx->java_instance, MPV_EVENT_COMMAND_REPLY, &data);
+    }
+}
+
 void *event_thread(void *arg)
 {
     MpvContext *ctx = static_cast<MpvContext*>(arg);
@@ -108,15 +132,16 @@ void *event_thread(void *arg)
         if (ctx->event_thread_request_exit)
             break;
 
-        if (mp_event->event_id == MPV_EVENT_NONE)
-            continue;
-
         if (env->PushLocalFrame(32) < 0) {
             ALOGE("event_thread: PushLocalFrame failed");
             continue;
         }
 
+        sendCommandFailuresToJava(env, ctx);
+
         switch (mp_event->event_id) {
+        case MPV_EVENT_NONE:
+            break;
         case MPV_EVENT_LOG_MESSAGE:
             msg = (mpv_event_log_message*)mp_event->data;
             ALOGV("[%s:%s] %s", msg->prefix, msg->level, msg->text);
