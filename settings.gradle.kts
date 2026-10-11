@@ -1,3 +1,6 @@
+extra["splitAarRoots"] = listOf(file("OUTPUT"))
+apply(from = file("gradle/restore-split-aars.settings.gradle.kts"))
+
 include(":lib")
 
 include(":ffmpeg")

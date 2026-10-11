@@ -12,6 +12,25 @@ Initially made for [mpvKt](https://github.com/abdallahmehiz/mpvKt).
 * **`mpv_node` support**
 * **DASH support** 
 
+## Split large AARs
+
+AARs larger than 100 MiB are stored as `.part001`, `.part002`, and a `.parts`
+checksum manifest, with each part limited to 90 MiB. MPV publication splits
+oversized AARs automatically. For other files or output directories, run:
+
+```sh
+python3 buildscripts/scripts/split-aar.py path/to/artifact.aar path/to/OUTPUT
+```
+
+Smaller AARs stay intact. Previously split AARs remain split when rebuilt.
+Gradle restores any `.aar.parts` manifest found in MPV's or Media3's `OUTPUT`
+folders; the parent app checks its own `OUTPUT` and every dependency's `OUTPUT`.
+Restored AARs are ignored by Git. Keep all parts and the manifest together.
+If the full AAR is already tracked, remove it from Git's index with
+`git rm --cached path/to/artifact.aar`, then commit its parts and manifest.
+An oversized AAR already committed in unpushed history must also be removed
+from those commits before GitHub will accept the push.
+
 ## Installation
 
 Add the dependency to your `build.gradle`:
