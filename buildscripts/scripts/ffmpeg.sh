@@ -14,6 +14,15 @@ fi
 mkdir -p _build$ndk_suffix
 cd _build$ndk_suffix
 
+# FF_VERSION is the upstream override used by av_version_info().
+ffmpeg_upstream="$(git -C .. rev-parse '@{upstream}')"
+ffmpeg_revision="$(git -C .. symbolic-ref --short HEAD)-$(git -C .. log -1 --format='git-%cs-%h' --abbrev=12 "$ffmpeg_upstream")"
+if ! git -C .. diff --quiet "$ffmpeg_upstream" -- ||
+    [[ -n "$(git -C .. ls-files --others --exclude-standard -- ':(exclude)FF_VERSION' ':(exclude)_build*/**')" ]]; then
+    ffmpeg_revision+=-dirty
+fi
+printf '%s\n' "$ffmpeg_revision" > ../FF_VERSION
+
 cpu=armv7-a
 [[ "$ndk_triple" == "aarch64"* ]] && cpu=armv8-a
 [[ "$ndk_triple" == "x86_64"* ]] && cpu=generic

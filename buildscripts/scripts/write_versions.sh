@@ -6,7 +6,8 @@ ndk_suffix="${1:-}"
 # get versions from source code
 MPV_VERSION=$(cat "buildscripts/deps/mpv/_build${ndk_suffix}/common/version.h" | grep "#define VERSION" | cut -d '"' -f 2)
 LIBPLACEBO_VERSION=$(cat "buildscripts/deps/libplacebo/_build${ndk_suffix}/src/version.h" | grep "#define BUILD_VERSION" | cut -d '"' -f 2)
-FFMPEG_VERSION=$(echo $(cd buildscripts/deps/ffmpeg/ && git rev-parse --short HEAD))
+FFMPEG_VERSION=$(sed -n 's/^#define FFMPEG_VERSION "\(.*\)"/\1/p' "buildscripts/deps/ffmpeg/_build${ndk_suffix}/libavutil/ffversion.h")
+[[ -n "$FFMPEG_VERSION" ]]
 # Read the compiler date from the final library. With LTO enabled the
 # intermediate version object does not reliably expose its string data.
 DATE=$(buildscripts/scripts/extract-build-date.sh "buildscripts/deps/mpv/_build${ndk_suffix}/libmpv.so")

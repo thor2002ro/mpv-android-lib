@@ -43,7 +43,7 @@ done
 provider_version="$(sed -n 's/^version=//p' <<<"$metadata")"
 ffmpeg_version="$(sed -n 's/^ffmpeg_version=//p' <<<"$metadata")"
 ffmpeg_commit="$(sed -n 's/^ffmpeg_commit=//p' <<<"$metadata")"
-[[ "$ffmpeg_version" =~ ^[0-9]+\.[0-9]+(\.[0-9]+)?$ ]] || {
+[[ "$ffmpeg_version" =~ ^[A-Za-z0-9._+-]+$ ]] || {
     echo "Provider FFmpeg version is invalid: $ffmpeg_version" >&2
     exit 1
 }
@@ -51,7 +51,12 @@ ffmpeg_commit="$(sed -n 's/^ffmpeg_commit=//p' <<<"$metadata")"
     echo "Provider FFmpeg commit is invalid: $ffmpeg_commit" >&2
     exit 1
 }
-[[ "$provider_version" == "${ffmpeg_version}-thor.${ffmpeg_commit:0:12}" ]] || {
+[[ "$provider_version" =~ ^[0-9]+\.[0-9]+(\.[0-9]+)?-[A-Za-z0-9._+-]+$ && (
+    "$provider_version" == "${ffmpeg_version}-thor.${ffmpeg_commit:0:12}" || (
+        "$provider_version" == "${provider_version%%-*}-$ffmpeg_version" &&
+        "${ffmpeg_version%-dirty}" == *"-${ffmpeg_commit:0:12}"
+    )
+) ]] || {
     echo "Provider version does not match FFmpeg $ffmpeg_version at $ffmpeg_commit: $provider_version" >&2
     exit 1
 }

@@ -68,7 +68,7 @@ done
 export LIBDOVI_ANDROID_SDK="$sdk_root"
 
 work_dir="$(mktemp -d "${TMPDIR:-/tmp}/mpv-android-lib.XXXXXXXX")"
-trap 'rm -rf "$work_dir"' EXIT
+trap 'if [[ $? == 0 ]]; then rm -rf "$work_dir"; else echo "Build failed; retained $work_dir" >&2; fi' EXIT
 export GRADLE_USER_HOME="$work_dir/.gradle-user-home"
 
 tar \
@@ -138,7 +138,7 @@ ffmpeg_provider_version=$(sed -n 's|.*<version>\([^<]*\)</version>.*|\1|p' "$ffm
 	echo "Couldn't read the MPV library version from $mpv_pom." >&2
 	exit 1
 }
-[[ "$ffmpeg_provider_version" =~ ^[0-9]+\.[0-9]+(\.[0-9]+)?-thor\.[0-9a-f]{12}$ ]] || {
+[[ "$ffmpeg_provider_version" =~ ^[0-9]+\.[0-9]+(\.[0-9]+)?-[A-Za-z0-9._+-]+$ ]] || {
 	echo "Couldn't read a commit-pinned provider version from $ffmpeg_provider_pom." >&2
 	exit 1
 }
@@ -166,22 +166,14 @@ grep -Fq "<version>$libass_version</version>" "$mpv_pom" || {
 }
 
 maven_root="$repo_dir/OUTPUT/maven"
-mpv_staging_dir="$work_dir/maven-stage/io/github/abdallahmehiz/mpv-android-lib/$mpv_version"
-ffmpeg_provider_staging_dir="$work_dir/maven-stage/io/github/abdallahmehiz/mpv-ffmpeg-android/$ffmpeg_provider_version"
-mkdir -p "$mpv_staging_dir" "$ffmpeg_provider_staging_dir"
-cp "$mpv_aar" "$mpv_staging_dir/mpv-android-lib-$mpv_version.aar"
-cp "$mpv_pom" "$mpv_staging_dir/mpv-android-lib-$mpv_version.pom"
-cp "$ffmpeg_provider_aar" "$ffmpeg_provider_staging_dir/mpv-ffmpeg-android-$ffmpeg_provider_version.aar"
-cp "$ffmpeg_provider_pom" "$ffmpeg_provider_staging_dir/mpv-ffmpeg-android-$ffmpeg_provider_version.pom"
-
-pending_root="$repo_dir/OUTPUT/maven.pending"
-rm -rf "$pending_root"
-mkdir -p "$pending_root"
-cp -R "$work_dir/maven-stage/." "$pending_root/"
-"$repo_dir/buildscripts/scripts/publish-maven-tree.sh" \
-	"$pending_root" \
-	"$maven_root" \
-	"io/github/abdallahmehiz/mpv-android-lib/$mpv_version/mpv-android-lib-$mpv_version.aar" \
-	"$repo_dir/buildscripts/scripts/validate-dovi-aar.sh"
+mpv_output_dir="$maven_root/io/github/abdallahmehiz/mpv-android-lib/$mpv_version"
+ffmpeg_provider_output_dir="$maven_root/io/github/abdallahmehiz/mpv-ffmpeg-android/$ffmpeg_provider_version"
+rm -rf "$maven_root"
+mkdir -p "$mpv_output_dir" "$ffmpeg_provider_output_dir"
+cp "$mpv_aar" "$mpv_output_dir/mpv-android-lib-$mpv_version.aar"
+cp "$mpv_pom" "$mpv_output_dir/mpv-android-lib-$mpv_version.pom"
+cp "$ffmpeg_provider_aar" "$ffmpeg_provider_output_dir/mpv-ffmpeg-android-$ffmpeg_provider_version.aar"
+cp "$ffmpeg_provider_pom" "$ffmpeg_provider_output_dir/mpv-ffmpeg-android-$ffmpeg_provider_version.pom"
+"$repo_dir/buildscripts/scripts/validate-dovi-aar.sh" "$mpv_output_dir/mpv-android-lib-$mpv_version.aar"
 echo "Created $maven_root/io/github/abdallahmehiz/mpv-android-lib/$mpv_version"
 echo "Created $maven_root/io/github/abdallahmehiz/mpv-ffmpeg-android/$ffmpeg_provider_version"

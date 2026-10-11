@@ -58,6 +58,11 @@ Decoder lookup uses that Dolby Vision profile rather than the HEVC base-layer
 profile. Unsupported Dolby Vision configurations fail instead of silently
 opening an HDR10 decoder.
 
+FFmpeg reports `master-git-YYYY-MM-DD-<12-digit commit>-dirty` through its
+upstream `FF_VERSION` override. The date is the upstream commit date; `dirty`
+means tracked source changes, including our patches. The wrapper reads the
+same generated version header. Maven/Prefab retain their numeric release base.
+
 Local FFmpeg patches also forward Android color/HDR metadata and stop a
 MediaCodec input/output busy loop after five seconds without progress. The
 existing Dolby Vision profile is preserved. The MediaCodec buffer and HEVC

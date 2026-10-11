@@ -36,8 +36,14 @@ media3_decoders=(
     mpeg4 msmpeg4v2 msmpeg4v3 h263 vc1 wmv1 wmv2 wmv3
 )
 
-ffmpeg_commit="$(git -C "$ffmpeg_repository" rev-parse HEAD)"
-ffmpeg_patch_sha256="$(git -C "$ffmpeg_repository" diff --binary HEAD | sha256sum | cut -d ' ' -f 1)"
+# Read the identity already embedded by the FFmpeg build.
+ffmpeg_version="$(LC_ALL=C strings "$wrapper_libraries/arm64-v8a/libavutil.so" | sed -n 's/.*FFmpeg version \([A-Za-z0-9._+-]*\)$/\1/p')"
+[[ "$ffmpeg_version" =~ ^[A-Za-z0-9._+-]+-git-[0-9]{4}-[0-9]{2}-[0-9]{2}-([0-9a-f]{12})(-dirty)?$ ]] || {
+    echo "Could not resolve the compiled FFmpeg version: $ffmpeg_version" >&2
+    exit 1
+}
+ffmpeg_commit="$(git -C "$ffmpeg_repository" rev-parse "${BASH_REMATCH[1]}^{commit}")"
+ffmpeg_patch_sha256="$(git -C "$ffmpeg_repository" diff --binary "$ffmpeg_commit" | sha256sum | cut -d ' ' -f 1)"
 [[ "$ffmpeg_commit" =~ ^[0-9a-f]{40}$ ]] || {
     echo "Could not resolve the exact FFmpeg commit." >&2
     exit 1
@@ -46,14 +52,20 @@ ffmpeg_patch_sha256="$(git -C "$ffmpeg_repository" diff --binary HEAD | sha256su
     echo "FFmpeg release file is missing: $ffmpeg_repository/RELEASE" >&2
     exit 1
 }
-ffmpeg_version="$(tr -d '[:space:]' < "$ffmpeg_repository/RELEASE")"
-ffmpeg_version="${ffmpeg_version%.git}"
-[[ "$ffmpeg_version" =~ ^[0-9]+\.[0-9]+(\.[0-9]+)?$ ]] || {
-    echo "Could not resolve the FFmpeg release version: $ffmpeg_version" >&2
+prefab_version="$(tr -d '[:space:]' < "$ffmpeg_repository/RELEASE")"
+prefab_version="${prefab_version%.git}"
+[[ "$prefab_version" =~ ^[0-9]+\.[0-9]+(\.[0-9]+)?$ ]] || {
+    echo "Could not resolve the FFmpeg release version: $prefab_version" >&2
     exit 1
 }
-provider_version="${ffmpeg_version}-thor.${ffmpeg_commit:0:12}"
-prefab_version="$ffmpeg_version"
+for abi in armeabi-v7a x86 x86_64; do
+    [[ "$(LC_ALL=C strings "$wrapper_libraries/$abi/libavutil.so" | sed -n 's/.*FFmpeg version \([A-Za-z0-9._+-]*\)$/\1/p')" == "$ffmpeg_version" ]] || {
+        echo "Compiled FFmpeg version differs for $abi." >&2
+        exit 1
+    }
+done
+# A numeric prefix keeps Maven versions sortable; Prefab is numeric only.
+provider_version="$prefab_version-$ffmpeg_version"
 [[ "$prefab_version" == *.*.* ]] || prefab_version="$prefab_version.0"
 
 rm -rf -- \
