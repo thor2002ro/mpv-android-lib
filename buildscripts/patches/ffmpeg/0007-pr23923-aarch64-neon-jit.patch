@@ -1,20 +1,8 @@
-Subject: [PATCH] swscale/aarch64: add opt-in LLVM NEON JIT backend
-
-Upstream proposal: https://code.ffmpeg.org/FFmpeg/FFmpeg/pulls/23923
-Patchwork snapshot: https://patchwork.ffmpeg.org/project/ffmpeg/patch/60182/
-Adapted to FFmpeg master e0e6ca1e29ef3f6b1e9b7d8656fe341eee8cf647.
-
-Use current SwsUOp translation and setup, keep the existing SPIR-V backend
-bit, reject unsupported/oversized chains, avoid aliased copied components,
-initialize LLVM once, and flush the AArch64 instruction cache before use.
-Link only the LLVM assembler components and use Android shared libc++.
-The backend remains experimental and requires explicit runtime opt-in.
-
 diff --git a/configure b/configure
-index 08ff689..a2d9f41 100755
+index 3a0ee5d..79e39c2 100755
 --- a/configure
 +++ b/configure
-@@ -321,6 +321,7 @@ External library support:
+@@ -322,6 +322,7 @@ External library support:
    --enable-libzimg         enable z.lib, needed for zscale filter [no]
    --enable-libzmq          enable message passing via libzmq [no]
    --enable-libzvbi         enable teletext support via libzvbi [no]
@@ -30,7 +18,7 @@ index 08ff689..a2d9f41 100755
    --nvcc=NVCC              use Nvidia CUDA compiler NVCC or clang [$nvcc_default]
    --ld=LD                  use linker LD [$ld_default]
    --metalcc=METALCC        use metal compiler METALCC [$metalcc_default]
-@@ -2137,6 +2139,7 @@ EXTERNAL_LIBRARY_LIST="
+@@ -2128,6 +2130,7 @@ EXTERNAL_LIBRARY_LIST="
      libzimg
      libzmq
      libzvbi
@@ -38,7 +26,7 @@ index 08ff689..a2d9f41 100755
      lv2
      mediacodec
      ohcodec
-@@ -2866,6 +2869,7 @@ CMDLINE_SET="
+@@ -2862,6 +2865,7 @@ CMDLINE_SET="
      ignore_tests
      install
      ld
@@ -46,7 +34,7 @@ index 08ff689..a2d9f41 100755
      ln_s
      logfile
      malloc_prefix
-@@ -4353,6 +4357,7 @@ shader_compression_suggest="zlib"
+@@ -4357,6 +4361,7 @@ shader_compression_suggest="zlib"
  avcodec_extralibs="pthreads_extralibs iconv_extralibs dxva2_extralibs liblcevc_dec_extralibs lcms2_extralibs"
  avfilter_extralibs="pthreads_extralibs"
  avutil_extralibs="d3d11va_extralibs d3d12va_extralibs mediacodec_extralibs nanosleep_extralibs pthreads_extralibs vaapi_drm_extralibs vaapi_x11_extralibs vaapi_win32_extralibs vdpau_x11_extralibs"
@@ -54,7 +42,7 @@ index 08ff689..a2d9f41 100755
  
  # programs
  ffmpeg_deps="avcodec avfilter avformat threads"
-@@ -4398,6 +4403,7 @@ makeinfo_default="makeinfo"
+@@ -4402,6 +4407,7 @@ makeinfo_default="makeinfo"
  install="install"
  ln_s_default="ln -s -f"
  glslc_default="glslc"
@@ -62,7 +50,7 @@ index 08ff689..a2d9f41 100755
  metalcc_default="xcrun -sdk macosx metal"
  metallib_default="xcrun -sdk macosx metallib"
  nm_default="nm -g"
-@@ -5049,7 +5055,7 @@ if enabled cuda_nvcc; then
+@@ -5053,7 +5059,7 @@ if enabled cuda_nvcc; then
  fi
  
  set_default arch cc doxygen pkg_config ranlib strip sysinclude \
@@ -71,7 +59,7 @@ index 08ff689..a2d9f41 100755
  enabled cross_compile || host_cc_default=$cc
  set_default host_cc
  
-@@ -7360,6 +7366,16 @@ enabled libvo_amrwbenc    && { check_pkg_config libvo_amrwbenc vo-amrwbenc vo-am
+@@ -7386,6 +7392,16 @@ enabled libvo_amrwbenc    && { check_pkg_config libvo_amrwbenc vo-amrwbenc vo-am
  enabled libvorbis         && require_pkg_config libvorbis vorbis vorbis/codec.h vorbis_info_init &&
                               require_pkg_config libvorbisenc vorbisenc vorbis/vorbisenc.h vorbis_encode_init
  
@@ -89,29 +77,30 @@ index 08ff689..a2d9f41 100755
  
  enabled libvpx            && {
 diff --git a/libswscale/aarch64/Makefile b/libswscale/aarch64/Makefile
-index 8fdcf00..8d0904e 100644
+index 734ad32..c067d98 100644
 --- a/libswscale/aarch64/Makefile
 +++ b/libswscale/aarch64/Makefile
-@@ -12,8 +12,17 @@ NEON-OBJS   += aarch64/hscale.o                 \
+@@ -12,8 +12,18 @@ NEON-OBJS   += aarch64/hscale.o                 \
                 aarch64/yuv2rgb_neon.o           \
  
- NEON-OBJS-$(CONFIG_UNSTABLE) += aarch64/ops.o
-+NEON-OBJS-$(CONFIG_UNSTABLE) += aarch64/ops_impl_conv.o
- NEON-OBJS-$(CONFIG_UNSTABLE) += aarch64/ops_neon.gen.o
+ NEON-OBJS   += aarch64/ops.o                    \
++               aarch64/ops_impl_conv.o          \
+                aarch64/ops_neon.gen.o           \
  
 +ifeq ($(CONFIG_LLVM),yes)
-+NEON-OBJS-$(CONFIG_UNSTABLE) += aarch64/ops_asmgen.o
-+NEON-OBJS-$(CONFIG_UNSTABLE) += aarch64/ops_jit.o
-+NEON-OBJS-$(CONFIG_UNSTABLE) += aarch64/ops_jit_llvm.o
-+NEON-OBJS-$(CONFIG_UNSTABLE) += aarch64/rasm.o
-+NEON-OBJS-$(CONFIG_UNSTABLE) += aarch64/rasm_print.o
++NEON-OBJS   += aarch64/ops_asmgen.o              \
++               aarch64/ops_jit.o                 \
++               aarch64/ops_jit_llvm.o            \
++               aarch64/rasm.o                    \
++               aarch64/rasm_print.o              \
++
 +endif
 +
  $(SUBDIR)aarch64/ops_neon.gen.S: $(SUBDIR)aarch64/ops_static$(HOSTEXESUF)
  	$(M)$< > $@.tmp
  	$(CP) $@.tmp $@
 diff --git a/libswscale/aarch64/ops.c b/libswscale/aarch64/ops.c
-index 963bfec..a6f13b1 100644
+index 0c4fb7d..7349938 100644
 --- a/libswscale/aarch64/ops.c
 +++ b/libswscale/aarch64/ops.c
 @@ -24,7 +24,8 @@
@@ -133,7 +122,7 @@ index 963bfec..a6f13b1 100644
                           SwsImplResult *out)
  {
      switch (uop->uop) {
-@@ -178,14 +179,14 @@ static int aarch64_compile_uops(SwsContext *ctx, const SwsUOpList *uops,
+@@ -178,14 +179,14 @@ static int compile_uops_aarch64(SwsContext *ctx, const SwsUOpList *uops,
      /* Look up kernel functions. */
      for (int i = 0; i < uops->num_ops; i++) {
          SwsAArch64OpImplParams params = { 0 };
@@ -482,7 +471,7 @@ index d77fcab..74a3296 100644
 +
  #endif /* SWSCALE_AARCH64_OPS_ASMGEN_H */
 diff --git a/libswscale/aarch64/ops_impl.h b/libswscale/aarch64/ops_impl.h
-index c9ad019..f0e020e 100644
+index ff3181f..94e4094 100644
 --- a/libswscale/aarch64/ops_impl.h
 +++ b/libswscale/aarch64/ops_impl.h
 @@ -52,6 +52,10 @@ typedef struct SwsAArch64OpImplParams {
@@ -2602,7 +2591,7 @@ index 6966eef..00fb573 100644
          }
      }
 diff --git a/libswscale/ops.c b/libswscale/ops.c
-index c07261c..a0c1bab 100644
+index 07dd1ab..5332988 100644
 --- a/libswscale/ops.c
 +++ b/libswscale/ops.c
 @@ -34,6 +34,7 @@
@@ -2611,7 +2600,7 @@ index c07261c..a0c1bab 100644
  extern const SwsOpBackend backend_aarch64;
 +extern const SwsOpBackend backend_aarch64_jit;
  extern const SwsOpBackend backend_x86;
- #if HAVE_SPIRV_HEADERS_SPIRV_H || HAVE_SPIRV_UNIFIED1_SPIRV_H
+ #if CONFIG_SWSCALE_VULKAN
  extern const SwsOpBackend backend_spirv;
 @@ -42,6 +43,9 @@ extern const SwsOpBackend backend_spirv;
  const SwsOpBackend * const ff_sws_op_backends[] = {

@@ -1,26 +1,25 @@
 diff --git a/demux/demux_lavf.c b/demux/demux_lavf.c
-index 4d91983e1..f17696fb2 100644
+index 1b9b087..93875c4 100644
 --- a/demux/demux_lavf.c
 +++ b/demux/demux_lavf.c
-@@ -38,7 +38,9 @@
- #include <libavutil/pixdesc.h>
+@@ -39,6 +39,8 @@
  #include <libavutil/replaygain.h>
  #include <libavutil/stereo3d.h>
-
+ 
 +#include <dovi.h>
 +
  #include "audio/chmap_avchannel.h"
-
+ 
  #include "common/common.h"
-@@ -53,6 +55,7 @@
-
+@@ -54,6 +56,7 @@
+ 
  #include "demux.h"
  #include "dovi_split.h"
 +#include "dovi_profile_convert.h"
  #include "stheader.h"
  #include "options/m_config.h"
  #include "options/m_option.h"
-@@ -227,6 +230,12 @@ struct stream_info {
+@@ -235,6 +238,12 @@ struct stream_info {
      double highest_pts;
      double ts_offset;
      struct mp_dovi_split *dovi_split;
@@ -31,9 +30,9 @@ index 4d91983e1..f17696fb2 100644
 +    uint32_t dovi_source_base;
 +    AVDOVIDecoderConfigurationRecord dovi_source_config;
  };
-
- typedef struct lavf_priv {
-@@ -704,6 +712,11 @@ static void handle_new_stream(demuxer_t *demuxer, int i)
+ 
+ struct avio_cookie {
+@@ -746,6 +755,11 @@ static void handle_new_stream(demuxer_t *demuxer, int i)
      struct sh_stream *sh = NULL;
      AVCodecParameters *codec = st->codecpar;
      int lavc_delay = codec->initial_padding;
@@ -42,11 +41,11 @@ index 4d91983e1..f17696fb2 100644
 +    uint64_t dovi_generation = 0;
 +    uint32_t dovi_source_base = DOVI_PRESENTATION_UNKNOWN;
 +    const AVDOVIDecoderConfigurationRecord *dovi_config = NULL;
-
+ 
      switch (codec->codec_type) {
      case AVMEDIA_TYPE_AUDIO: {
-@@ -779,12 +791,23 @@ static void handle_new_stream(demuxer_t *demuxer, int i)
-
+@@ -824,12 +838,23 @@ static void handle_new_stream(demuxer_t *demuxer, int i)
+ 
          if ((sd = mp_av_stream_get_side_data(st, AV_PKT_DATA_DOVI_CONF))) {
              const AVDOVIDecoderConfigurationRecord *cfg = (void *) sd;
 +            dovi_config = cfg;
@@ -67,9 +66,9 @@ index 4d91983e1..f17696fb2 100644
 +                     cfg->dv_bl_signal_compatibility_id == 4)
 +                dovi_source_base = DOVI_PRESENTATION_HLG;
          }
-
+ 
          // AVI uses decode-order indices as DTS and needs the compensation.
-@@ -830,6 +852,12 @@ static void handle_new_stream(demuxer_t *demuxer, int i)
+@@ -875,6 +900,12 @@ static void handle_new_stream(demuxer_t *demuxer, int i)
          .sh = sh,
          .last_key_pts = MP_NOPTS_VALUE,
          .highest_pts = MP_NOPTS_VALUE,
@@ -82,8 +81,7 @@ index 4d91983e1..f17696fb2 100644
      };
      mp_assert(priv->num_streams == i); // directly mapped
      MP_TARRAY_APPEND(priv, priv->streams, priv->num_streams, info);
-@@ -848,7 +875,14 @@ static void handle_new_stream(demuxer_t *demuxer, int i)
-         talloc_set_destructor(lavp, avcodec_par_destructor);
+@@ -888,6 +919,13 @@ static void handle_new_stream(demuxer_t *demuxer, int i)
          *lavp = avcodec_parameters_alloc();
          if (*lavp && avcodec_parameters_copy(*lavp, codec) >= 0)
              sh->codec->lav_codecpar = *lavp;
@@ -97,10 +95,10 @@ index 4d91983e1..f17696fb2 100644
          sh->codec->native_tb_num = st->time_base.num;
          sh->codec->native_tb_den = st->time_base.den;
          sh->codec->duration = st->duration * av_q2d(st->time_base);
-@@ -1737,6 +1771,17 @@ static bool demux_lavf_read_packet(struct demuxer *demux,
+@@ -1832,6 +1870,17 @@ static bool demux_lavf_read_packet(struct demuxer *demux,
      }
      av_packet_free(&pkt);
-
+ 
 +    if (info->dovi_setup_failed ||
 +        (info->dovi_transform &&
 +         !mp_dovi_transform_packet(demux, &dp, &info->dovi_request,
@@ -114,21 +112,21 @@ index 4d91983e1..f17696fb2 100644
 +
      if (priv->format_hack.clear_filepos)
          dp->pos = -1;
-
+ 
 diff --git a/demux/demux_mkv.c b/demux/demux_mkv.c
-index e9159d752..7d631e85a 100644
+index d3e565e..d28c475 100644
 --- a/demux/demux_mkv.c
 +++ b/demux/demux_mkv.c
-@@ -37,6 +37,8 @@
+@@ -38,6 +38,8 @@
  #include <libavcodec/avcodec.h>
  #include <libavcodec/version.h>
-
+ 
 +#include <dovi.h>
 +
  #include <libplacebo/utils/libav.h>
-
+ 
  #include "config.h"
-@@ -56,6 +58,7 @@
+@@ -57,6 +59,7 @@
  #include "video/mp_image.h"
  #include "demux.h"
  #include "dovi_split.h"
@@ -136,7 +134,7 @@ index e9159d752..7d631e85a 100644
  #include "packet_pool.h"
  #include "stheader.h"
  #include "ebml.h"
-@@ -169,6 +172,10 @@ typedef struct mkv_track {
+@@ -170,6 +173,10 @@ typedef struct mkv_track {
      AVDOVIDecoderConfigurationRecord *dovi_config;
      bstr hvce;
      struct mp_dovi_split *dovi_split;
@@ -145,17 +143,17 @@ index e9159d752..7d631e85a 100644
 +    uint64_t dovi_generation;
 +    uint32_t dovi_source_base;
  } mkv_track_t;
-
+ 
  typedef struct mkv_index {
-@@ -238,6 +244,7 @@ typedef struct mkv_demuxer {
+@@ -240,6 +247,7 @@ typedef struct mkv_demuxer {
      int num_packets;
-
+ 
      bool probably_webm_dash_init;
 +    bool dovi_transform_failed;
  } mkv_demuxer_t;
-
+ 
  #define OPT_BASE_STRUCT struct demux_mkv_opts
-@@ -1809,6 +1816,24 @@ static int demux_mkv_open_video(demuxer_t *demuxer, mkv_track_t *track, int idx)
+@@ -1828,6 +1836,24 @@ static int demux_mkv_open_video(demuxer_t *demuxer, mkv_track_t *track, int idx)
          sh_v->dv_profile = track->dovi_config->dv_profile;
          sh_v->dv_el_present = track->dovi_config->bl_present_flag &&
                                track->dovi_config->el_present_flag;
@@ -178,12 +176,12 @@ index e9159d752..7d631e85a 100644
 +            ((mkv_demuxer_t *)demuxer->priv)->dovi_transform_failed = true;
 +        }
      }
-
+ 
  #if LIBAVCODEC_VERSION_INT >= AV_VERSION_INT(62, 35, 100)
-@@ -2925,6 +2949,17 @@ static void mkv_parse_and_add_packet(demuxer_t *demuxer, mkv_track_t *track,
+@@ -2946,6 +2972,17 @@ static void mkv_parse_and_add_packet(demuxer_t *demuxer, mkv_track_t *track,
  {
      struct sh_stream *stream = track->stream;
-
+ 
 +    if (track->dovi_transform &&
 +        !mp_dovi_transform_packet(demuxer, &dp, &track->dovi_request,
 +                                  track->dovi_generation,
@@ -197,10 +195,10 @@ index e9159d752..7d631e85a 100644
 +
      if (stream->type == STREAM_AUDIO && handle_realaudio(demuxer, track, dp))
          return;
-
-@@ -3424,6 +3458,8 @@ static bool demux_mkv_read_packet(struct demuxer *demuxer,
+ 
+@@ -3455,6 +3492,8 @@ static bool demux_mkv_read_packet(struct demuxer *demuxer,
      struct mkv_demuxer *mkv_d = demuxer->priv;
-
+ 
      for (;;) {
 +        if (mkv_d->dovi_transform_failed)
 +            return false;
@@ -209,7 +207,7 @@ index e9159d752..7d631e85a 100644
              MP_TARRAY_REMOVE_AT(mkv_d->packets, mkv_d->num_packets, 0);
 diff --git a/demux/dovi_profile_convert.c b/demux/dovi_profile_convert.c
 new file mode 100644
-index 000000000..2ecc5b9cd
+index 0000000..f3db4d6
 --- /dev/null
 +++ b/demux/dovi_profile_convert.c
 @@ -0,0 +1,339 @@
@@ -554,7 +552,7 @@ index 000000000..2ecc5b9cd
 +}
 diff --git a/demux/dovi_profile_convert.h b/demux/dovi_profile_convert.h
 new file mode 100644
-index 000000000..29dab67ff
+index 0000000..6c2ba2b
 --- /dev/null
 +++ b/demux/dovi_profile_convert.h
 @@ -0,0 +1,25 @@
@@ -584,7 +582,7 @@ index 000000000..29dab67ff
 +
 +#endif
 diff --git a/meson.build b/meson.build
-index e57190437..e3136005d 100644
+index 327a432..8cf85b9 100644
 --- a/meson.build
 +++ b/meson.build
 @@ -26,6 +26,7 @@ libavformat = dependency('libavformat', version: '>= 60.16.100')
@@ -592,8 +590,8 @@ index e57190437..e3136005d 100644
  libswresample = dependency('libswresample', version: '>= 4.12.100')
  libswscale = dependency('libswscale', version: '>= 7.5.100')
 +jellyfin_dovi = dependency('jellyfin-dovi')
-
- libplacebo = dependency('libplacebo', version: '>=7.360.1',
+ 
+ libplacebo = dependency('libplacebo', version: '>=7.387.0',
                  default_options: ['default_library=static', 'demos=false'])
 @@ -40,6 +41,7 @@ dependencies = [libass,
                  libavformat,
@@ -602,8 +600,8 @@ index e57190437..e3136005d 100644
 +                jellyfin_dovi,
                  libswresample,
                  libswscale]
-
-@@ -108,6 +110,7 @@ sources = files(
+ 
+@@ -109,6 +111,7 @@ sources = files(
      'demux/demux_raw.c',
      'demux/demux_timeline.c',
      'demux/dovi_split.c',

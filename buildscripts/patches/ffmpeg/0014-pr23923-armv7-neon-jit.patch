@@ -548,7 +548,7 @@ index a0c1bab..28c2cfa 100644
  extern const SwsOpBackend backend_aarch64_jit;
 +extern const SwsOpBackend backend_arm_jit;
  extern const SwsOpBackend backend_x86;
- #if HAVE_SPIRV_HEADERS_SPIRV_H || HAVE_SPIRV_UNIFIED1_SPIRV_H
+ #if CONFIG_SWSCALE_VULKAN
  extern const SwsOpBackend backend_spirv;
 @@ -47,6 +48,8 @@ const SwsOpBackend * const ff_sws_op_backends[] = {
      &backend_aarch64_jit,

@@ -20,20 +20,20 @@ jobs:
       contents: write
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - name: Checkout shared libass provider
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           repository: thor2002ro/libass-android
           ref: master
           path: dependencies/libass-android
       - name: Checkout Dolby Vision SDK
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           repository: thor2002ro/libdovi-android
           ref: main
           path: dependencies/libdovi-android
-      - uses: actions/setup-java@v4
+      - uses: actions/setup-java@v6
         with:
           java-version: '17'
           distribution: temurin
@@ -68,7 +68,7 @@ jobs:
           mv lib/build/outputs/aar/lib-release.aar mpv-android-lib-${{ env.VERSION_TAG }}.aar
       - name: Create Release
         if: startsWith(github.ref, 'refs/tags/')
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@v3
         with:
           tag_name: ${{ env.VERSION_TAG }}
           name: mpv-android-lib ${{ env.VERSION_TAG }}

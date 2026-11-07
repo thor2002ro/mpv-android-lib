@@ -29,14 +29,6 @@ index c526ea1..e540d30 100644
  #define YUV_TO_RGB_TABLE                                                                    \
          c->yuv2rgb_v2r_coeff,                                                               \
          c->yuv2rgb_u2g_coeff,                                                               \
-@@ -150,6 +153,7 @@ DECLARE_FF_NVX_TO_ALL_RGBX_FUNCS(nv21)
-         && !(c->opts.src_w & 15)                                                            \
-         && !accurate_rnd) {                                                                 \
-         c->convert_unscaled = ifmt##_to_##ofmt##_neon_wrapper;                              \
-+        c->dst_slice_align = FFMAX(c->dst_slice_align, 1 << c->chrSrcVSubSample);            \
-     }                                                                                       \
- } while (0)
- 
 @@ -162,6 +166,7 @@ DECLARE_FF_NVX_TO_ALL_RGBX_FUNCS(nv21)
  
  static void get_unscaled_swscale_neon(SwsInternal *c) {
