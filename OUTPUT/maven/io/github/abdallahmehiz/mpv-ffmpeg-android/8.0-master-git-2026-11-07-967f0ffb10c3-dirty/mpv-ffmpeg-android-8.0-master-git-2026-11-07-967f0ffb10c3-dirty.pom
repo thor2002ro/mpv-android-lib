@@ -9,7 +9,7 @@
   <modelVersion>4.0.0</modelVersion>
   <groupId>io.github.abdallahmehiz</groupId>
   <artifactId>mpv-ffmpeg-android</artifactId>
-  <version>8.0-master-git-2026-10-11-d9242028a636-dirty</version>
+  <version>8.0-master-git-2026-11-07-967f0ffb10c3-dirty</version>
   <packaging>aar</packaging>
   <name>mpv FFmpeg Android provider</name>
   <description>The shared FFmpeg libraries used by mpv and Media3 on Android.</description>
