@@ -50,7 +50,7 @@ for expected in \
 	'artifact=libass-android-provider' \
 	"ndk_version=$v_ndk_n" \
 	'abis=armeabi-v7a,arm64-v8a,x86,x86_64' \
-	'optimization=O3,thin-lto,armv7-neon,armv7-thumb,arm64-neon'
+	'optimization=O3,full-lto,armv7-neon,armv7-thumb,arm64-neon'
 do
 	grep -Fxq "$expected" <<<"$metadata" || {
 		echo "Provider metadata is missing: $expected" >&2

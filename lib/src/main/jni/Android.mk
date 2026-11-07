@@ -66,7 +66,7 @@ include $(PREBUILT_SHARED_LIBRARY)
 include $(CLEAR_VARS)
 
 LOCAL_MODULE    := libmpvjni
-LOCAL_CFLAGS    := -Werror -O3 -flto=thin
+LOCAL_CFLAGS    := -Werror -O3 -flto=full
 LOCAL_CPPFLAGS  += -std=c++11
 ifeq ($(TARGET_ARCH_ABI),armeabi-v7a)
 LOCAL_CFLAGS    += -mfpu=neon
@@ -83,7 +83,7 @@ LOCAL_SRC_FILES := \
 	thumbnail.cpp \
 	mpv_context.cpp
 LOCAL_LDLIBS    := -llog -latomic
-LOCAL_LDFLAGS   := -flto=thin -Wl,-z,max-page-size=16384
+LOCAL_LDFLAGS   := -flto=full -Wl,-z,max-page-size=16384
 LOCAL_SHARED_LIBRARIES := swscale avcodec avutil mpv
 
 include $(BUILD_SHARED_LIBRARY)

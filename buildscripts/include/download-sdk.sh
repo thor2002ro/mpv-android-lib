@@ -90,9 +90,7 @@ chmod +x bin/gas-preprocessor.pl
 meson_version=$(meson --version 2>/dev/null || echo 0)
 if [ "$os" == "linux" ] && [ "$(printf '%s\n%s\n' "$v_meson" "$meson_version" | sort -V | head -n1)" != "$v_meson" ]; then
 	if [ ! -d "meson-${v_meson}" ]; then
-		$WGET "https://github.com/mesonbuild/meson/releases/download/${v_meson}/meson-${v_meson}.tar.gz"
-		tar -xzf "meson-${v_meson}.tar.gz"
-		rm "meson-${v_meson}.tar.gz"
+		git clone --branch "$v_meson" --depth 1 https://github.com/mesonbuild/meson.git "meson-${v_meson}"
 	fi
 	ln -sf "../meson-${v_meson}/meson.py" bin/meson
 fi

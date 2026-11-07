@@ -144,7 +144,7 @@ ffmpeg_commit=$ffmpeg_commit
 ffmpeg_patch_sha256=$ffmpeg_patch_sha256
 ndk_version=$ndk_version
 abis=armeabi-v7a,arm64-v8a,x86,x86_64
-optimization=O3,thin-lto,armv7-neon,armv7-thumb,arm64-neon
+optimization=O3,full-lto,armv7-neon,armv7-thumb,arm64-neon
 decoders=$decoders_csv
 encoders=ac3
 EOF

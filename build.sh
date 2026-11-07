@@ -67,22 +67,40 @@ for abi in armeabi-v7a arm64-v8a x86 x86_64; do
 done
 export LIBDOVI_ANDROID_SDK="$sdk_root"
 
-work_dir="$(mktemp -d "${TMPDIR:-/tmp}/mpv-android-lib.XXXXXXXX")"
-trap 'if [[ $? == 0 ]]; then rm -rf "$work_dir"; else echo "Build failed; retained $work_dir" >&2; fi' EXIT
+if [[ -n "${MPV_BUILD_WORK_DIR:-}" ]]; then
+	work_dir="$(realpath "$MPV_BUILD_WORK_DIR")"
+	[[ -d "$work_dir/buildscripts/deps" ]] || {
+		echo "Invalid MPV build work directory: $work_dir" >&2
+		exit 1
+	}
+	resume_build=1
+else
+	work_dir="$(mktemp -d "${TMPDIR:-/tmp}/mpv-android-lib.XXXXXXXX")"
+	resume_build=0
+	trap 'if [[ $? == 0 ]]; then rm -rf "$work_dir"; else echo "Build failed; retained $work_dir" >&2; fi' EXIT
+fi
 export GRADLE_USER_HOME="$work_dir/.gradle-user-home"
 
-tar \
-	--exclude=.git \
-	--exclude=.gradle \
-	--exclude=OUTPUT \
-	--exclude='*/build' \
-	-C "$repo_dir" -cf - . | tar -C "$work_dir" -xf -
+if (( resume_build == 0 )); then
+	tar \
+		--exclude=.git \
+		--exclude=.gradle \
+		--exclude=OUTPUT \
+		--exclude='*/build' \
+		-C "$repo_dir" -cf - . | tar -C "$work_dir" -xf -
 
-rm -f "$work_dir/lib/src/main/assets/subfont.ttf"
-find "$work_dir" -type f \( -name '*.sh' -o -name '*.patch' \) -exec sed -i 's/\r$//' {} +
-sed -i 's/\r$//' "$work_dir/gradlew"
-rm -f "$work_dir/lib/src/main/jniLibs"
-ln -s libs "$work_dir/lib/src/main/jniLibs"
+	rm -f "$work_dir/lib/src/main/assets/subfont.ttf"
+	find "$work_dir" -type f \( -name '*.sh' -o -name '*.patch' \) -exec sed -i 's/\r$//' {} +
+	sed -i 's/\r$//' "$work_dir/gradlew"
+	rm -f "$work_dir/lib/src/main/jniLibs"
+	ln -s libs "$work_dir/lib/src/main/jniLibs"
+
+	if [[ -n "${ANDROID_SDK_ROOT:-}" && -d "$ANDROID_SDK_ROOT" ]]; then
+		mkdir -p "$work_dir/buildscripts/sdk"
+		ln -s "$ANDROID_SDK_ROOT" "$work_dir/buildscripts/sdk/android-sdk-linux"
+		ln -s "$ANDROID_SDK_ROOT/ndk/30.0.16248370" "$work_dir/buildscripts/sdk/android-ndk-r30"
+	fi
+fi
 
 libass_build_repository="$work_dir/libass-maven"
 libass_build_version_dir="$libass_build_repository/$libass_maven_relative"
@@ -95,7 +113,9 @@ export ORG_GRADLE_PROJECT_libassProviderRepository="$libass_build_repository"
 export ORG_GRADLE_PROJECT_libassProviderProperties="$libass_build_properties"
 
 cd "$work_dir/buildscripts"
-IN_CI=1 ./download.sh
+if (( resume_build == 0 )); then
+	IN_CI=1 ./download.sh
+fi
 for arch in armv7l arm64 x86 x86_64; do
 	./buildall.sh --arch "$arch" mpv
 done
@@ -146,6 +166,21 @@ ffmpeg_provider_version=$(sed -n 's|.*<version>\([^<]*\)</version>.*|\1|p' "$ffm
 jar --update --file "$ffmpeg_provider_aar" \
 	-C "$work_dir/ffmpeg/src/main/generated" META-INF \
 	-C "$work_dir/ffmpeg/src/main/generated" prefab
+
+strip_aar() {
+	local aar="$1" root replacement
+	root=$(mktemp -d)
+	replacement=$(mktemp --suffix=.aar)
+	unzip -q "$aar" -d "$root"
+	while IFS= read -r -d '' library; do
+		"$work_dir/buildscripts/sdk/android-ndk-r30/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-strip" --strip-unneeded "$library"
+	done < <(find "$root" -type f -name '*.so' -print0)
+	(cd "$root" && jar --create --file "$replacement" .)
+	mv "$replacement" "$aar"
+	rm -rf "$root"
+}
+strip_aar "$mpv_aar"
+strip_aar "$ffmpeg_provider_aar"
 "$repo_dir/buildscripts/scripts/validate-ffmpeg-provider-aar.sh" "$ffmpeg_provider_aar"
 "$repo_dir/buildscripts/scripts/validate-dovi-aar.sh" "$mpv_aar"
 grep -Fq '<artifactId>mpv-ffmpeg-android</artifactId>' "$mpv_pom" || {

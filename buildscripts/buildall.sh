@@ -60,13 +60,13 @@ loadarch () {
 	export CXX=$cc_triple-clang++
 	export CC_FOR_BUILD=clang
 	export CXX_FOR_BUILD=clang++
-	local target_optimization_flags="-O3 -flto=thin"
+	local target_optimization_flags="-O3 -flto=full"
 	if [ "$1" == "armv7l" ]; then
 		target_optimization_flags="$target_optimization_flags -mfpu=neon -mthumb"
 	fi
 	export CFLAGS="$target_optimization_flags"
 	export CXXFLAGS="$target_optimization_flags"
-	export LDFLAGS="-flto=thin -Wl,-O1,--icf=safe -Wl,-z,max-page-size=16384"
+	export LDFLAGS="-flto=full -Wl,-O1,--icf=safe -Wl,-z,max-page-size=16384"
 	export AR=llvm-ar
 	export RANLIB=llvm-ranlib
 }

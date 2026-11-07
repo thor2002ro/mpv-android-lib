@@ -33,7 +33,7 @@ for expected in \
     'artifact=mpv-ffmpeg-android' \
     'ndk_version=30.0.16248370' \
     'abis=armeabi-v7a,arm64-v8a,x86,x86_64' \
-    'optimization=O3,thin-lto,armv7-neon,armv7-thumb,arm64-neon'
+    'optimization=O3,full-lto,armv7-neon,armv7-thumb,arm64-neon'
 do
     grep -Fxq "$expected" <<<"$metadata" || {
         echo "Provider metadata is missing: $expected" >&2
